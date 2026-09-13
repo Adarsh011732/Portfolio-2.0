@@ -164,10 +164,25 @@ export function PortfolioProvider({ children }) {
   const [isEducationModalOpen, setIsEducationModalOpen] = useState(false);
   const [isOwnerAuthModalOpen, setIsOwnerAuthModalOpen] = useState(false);
 
-  // Owner Mode Switch (Hides all admin/sync/add buttons from public visitors)
+  // Security Configuration: 15-minute inactivity timeout
+  const OWNER_SESSION_TIMEOUT_MS = 15 * 60 * 1000;
+
+  // Owner Mode Switch (Session-scoped and auto-expiring to prevent unauthorized access)
   const [isOwnerMode, setIsOwnerModeState] = useState(() => {
     try {
-      return localStorage.getItem('portfolio_owner_mode') === 'true';
+      // Clear legacy un-expiring localStorage
+      localStorage.removeItem('portfolio_owner_mode');
+
+      const isSessionActive = sessionStorage.getItem('portfolio_owner_mode') === 'true';
+      const expiresAt = parseInt(sessionStorage.getItem('portfolio_owner_expires') || '0', 10);
+
+      if (isSessionActive && expiresAt > Date.now()) {
+        return true;
+      } else {
+        sessionStorage.removeItem('portfolio_owner_mode');
+        sessionStorage.removeItem('portfolio_owner_expires');
+        return false;
+      }
     } catch (e) {
       return false;
     }
@@ -184,26 +199,6 @@ export function PortfolioProvider({ children }) {
 
   const isCertificateModalOpen = isCertificateModalOpenState && isOwnerMode;
 
-  const toggleOwnerMode = () => {
-    if (!isOwnerMode) {
-      // Prompt 2-Step OTP / Passkey Verification to log in
-      setIsOwnerAuthModalOpen(true);
-    } else {
-      // Log out of Owner Mode
-      setIsOwnerModeState(false);
-      setIsCertificateModalOpenState(false);
-      setIsAdminOpen(false);
-      setIsAddProjectModalOpen(false);
-      setIsGitHubModalOpen(false);
-      setIsResumeModalOpen(false);
-      setIsLeetCodeModalOpen(false);
-      try {
-        localStorage.setItem('portfolio_owner_mode', 'false');
-      } catch (e) { }
-      showToast('🔒 Logged out of Owner Mode — Switched to Visitor View');
-    }
-  };
-
   const setIsOwnerMode = (val) => {
     setIsOwnerModeState(val);
     if (!val) {
@@ -213,11 +208,77 @@ export function PortfolioProvider({ children }) {
       setIsGitHubModalOpen(false);
       setIsResumeModalOpen(false);
       setIsLeetCodeModalOpen(false);
+      try {
+        sessionStorage.removeItem('portfolio_owner_mode');
+        sessionStorage.removeItem('portfolio_owner_expires');
+        localStorage.removeItem('portfolio_owner_mode');
+      } catch (e) { }
+    } else {
+      try {
+        sessionStorage.setItem('portfolio_owner_mode', 'true');
+        sessionStorage.setItem('portfolio_owner_expires', String(Date.now() + OWNER_SESSION_TIMEOUT_MS));
+        localStorage.removeItem('portfolio_owner_mode');
+      } catch (e) { }
     }
-    try {
-      localStorage.setItem('portfolio_owner_mode', String(val));
-    } catch (e) { }
   };
+
+  const toggleOwnerMode = () => {
+    if (!isOwnerMode) {
+      // Prompt 2-Step OTP / Passkey Verification to log in
+      setIsOwnerAuthModalOpen(true);
+    } else {
+      // Log out of Owner Mode immediately
+      setIsOwnerMode(false);
+      showToast('🔒 Logged out of Owner Mode — Switched to Visitor View');
+    }
+  };
+
+  // High-Security Inactivity Auto-Lock: automatically locks if idle for 15 minutes or tab closed
+  useEffect(() => {
+    if (!isOwnerMode) return;
+
+    let timeoutId;
+
+    const resetInactivityTimer = () => {
+      clearTimeout(timeoutId);
+      const newExpiresAt = Date.now() + OWNER_SESSION_TIMEOUT_MS;
+      try {
+        sessionStorage.setItem('portfolio_owner_expires', String(newExpiresAt));
+      } catch (e) { }
+
+      timeoutId = setTimeout(() => {
+        setIsOwnerMode(false);
+        showToast('🔒 Owner Mode auto-locked due to 15 minutes of inactivity.', 'info');
+      }, OWNER_SESSION_TIMEOUT_MS);
+    };
+
+    resetInactivityTimer();
+
+    const activityEvents = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    const handleActivity = () => resetInactivityTimer();
+
+    activityEvents.forEach(evt => window.addEventListener(evt, handleActivity, { passive: true }));
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const expiresAt = parseInt(sessionStorage.getItem('portfolio_owner_expires') || '0', 10);
+        if (Date.now() >= expiresAt) {
+          setIsOwnerMode(false);
+          showToast('🔒 Owner Mode auto-locked while away.', 'info');
+        } else {
+          resetInactivityTimer();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearTimeout(timeoutId);
+      activityEvents.forEach(evt => window.removeEventListener(evt, handleActivity));
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isOwnerMode]);
 
   const [activeCategory, setActiveCategory] = useState('all');
   const [toastMessage, setToastMessage] = useState(null);

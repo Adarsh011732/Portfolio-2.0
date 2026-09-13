@@ -107,16 +107,16 @@ export default function Navbar() {
           {/* Owner Mode Switch Toggle */}
           <button
             onClick={toggleOwnerMode}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition-all text-xs font-mono ${
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition-all text-xs font-mono cursor-pointer ${
               isOwnerMode 
-                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-sm' 
+                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-sm hover:bg-emerald-500/25' 
                 : 'bg-[var(--bg-surface-high)] text-[var(--text-dim)] hover:text-[var(--text-main)] border-white/5'
             }`}
-            title={isOwnerMode ? "Owner Mode Active — Click to switch to Visitor View" : "Click to switch to Owner Mode (Enables edit and sync options)"}
+            title={isOwnerMode ? "Owner Mode Active (Auto-locks on 15m idle or tab close) — Click to Lock Immediately" : "Click to switch to Owner Mode (Requires Passkey or OTP)"}
           >
             <Lock size={12} className={isOwnerMode ? "text-emerald-400" : "text-[var(--text-dim)]"} />
             <span className="text-[11px] font-semibold hidden sm:inline">
-              {isOwnerMode ? 'Owner: ON' : 'Owner'}
+              {isOwnerMode ? 'Owner: Active' : 'Owner'}
             </span>
             {isOwnerMode && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
           </button>
