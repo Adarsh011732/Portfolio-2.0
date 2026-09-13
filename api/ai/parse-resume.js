@@ -1,5 +1,34 @@
 import { handleCors, readBody, json } from '../_lib/cors.js';
 
+// Polyfill DOM globals required by pdfjs-dist inside pdf-parse in Node.js / Serverless environments
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  globalThis.DOMMatrix = class DOMMatrix {
+    constructor(init) {
+      this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0;
+      this.m11 = 1; this.m12 = 0; this.m13 = 0; this.m14 = 0;
+      this.m21 = 0; this.m22 = 1; this.m23 = 0; this.m24 = 0;
+      this.m31 = 0; this.m32 = 0; this.m33 = 1; this.m34 = 0;
+      this.m41 = 0; this.m42 = 0; this.m43 = 0; this.m44 = 1;
+      this.is2D = true; this.isIdentity = true;
+      if (Array.isArray(init) && init.length >= 6) {
+        this.a = init[0]; this.b = init[1]; this.c = init[2]; this.d = init[3]; this.e = init[4]; this.f = init[5];
+      }
+    }
+    multiply() { return this; }
+    translate() { return this; }
+    scale() { return this; }
+    rotate() { return this; }
+    inverse() { return this; }
+    transformPoint(p) { return p || { x: 0, y: 0 }; }
+  };
+}
+if (typeof globalThis.Path2D === 'undefined') {
+  globalThis.Path2D = class Path2D {};
+}
+if (typeof globalThis.ImageData === 'undefined') {
+  globalThis.ImageData = class ImageData {};
+}
+
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (req.method !== 'POST') {
@@ -32,11 +61,27 @@ export default async function handler(req, res) {
 
 async function parsePDFBase64(base64String) {
   const buffer = Buffer.from(base64String, 'base64');
-  const { PDFParse } = await import('pdf-parse');
-  const parser = new PDFParse({ data: buffer });
-  const textResult = await parser.getText();
-  await parser.destroy();
-  return textResult.text || '';
+  try {
+    const { PDFParse } = await import('pdf-parse');
+    const parser = new PDFParse({ data: buffer });
+    const textResult = await parser.getText();
+    await parser.destroy();
+    return textResult.text || '';
+  } catch (err) {
+    console.warn('[PDFParse] Primary parser note:', err.message);
+    // Fallback: extract ASCII string tokens from PDF if available
+    const str = buffer.toString('binary');
+    const textChunks = [];
+    const textRegex = /\(([^)]+)\)\s*Tj/g;
+    let match;
+    while ((match = textRegex.exec(str)) !== null) {
+      textChunks.push(match[1]);
+    }
+    if (textChunks.length > 10) {
+      return textChunks.join(' ');
+    }
+    throw err;
+  }
 }
 
 function extractResumeFields(rawText) {
