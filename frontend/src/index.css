@@ -1,0 +1,262 @@
+@import "tailwindcss";
+
+@layer base {
+  :root,
+  [data-theme="dark"],
+  [data-theme="monochrome"],
+  [data-theme="obsidian"] {
+    --bg-primary: #000000;
+    --bg-surface: #050505;
+    --bg-surface-low: #0a0a0a;
+    --bg-surface-card: rgba(14, 14, 14, 0.85);
+    --bg-surface-high: #141414;
+    --bg-surface-variant: #222222;
+    --primary: #ffffff;
+    --primary-glow: rgba(255, 255, 255, 0.35);
+    --primary-container: #e4e4e7;
+    --on-primary: #000000;
+    --text-main: #ffffff;
+    --text-muted: #d4d4d8;
+    --text-dim: #71717a;
+    --border-color: rgba(255, 255, 255, 0.12);
+    --border-highlight: rgba(255, 255, 255, 0.45);
+    --accent-silver: #e4e4e7;
+  }
+
+  [data-theme="cyber"] {
+    --bg-primary: #070a14;
+    --bg-surface: #03060c;
+    --bg-surface-low: #0c1224;
+    --bg-surface-card: rgba(12, 18, 36, 0.78);
+    --bg-surface-high: #152244;
+    --bg-surface-variant: #1e3060;
+    --primary: #38bdf8;
+    --primary-glow: rgba(56, 189, 248, 0.4);
+    --primary-container: #0284c7;
+    --on-primary: #032034;
+    --text-main: #f0f9ff;
+    --text-muted: #bae6fd;
+    --text-dim: #7dd3fc;
+    --border-color: rgba(56, 189, 248, 0.18);
+    --border-highlight: rgba(56, 189, 248, 0.45);
+    --accent-silver: #e0f2fe;
+  }
+
+  [data-theme="emerald"] {
+    --bg-primary: #05140f;
+    --bg-surface: #020a07;
+    --bg-surface-low: #0a221a;
+    --bg-surface-card: rgba(10, 34, 26, 0.78);
+    --bg-surface-high: #11382b;
+    --bg-surface-variant: #194e3c;
+    --primary: #34d399;
+    --primary-glow: rgba(52, 211, 153, 0.4);
+    --primary-container: #059669;
+    --on-primary: #042f24;
+    --text-main: #ecfdf5;
+    --text-muted: #a7f3d0;
+    --text-dim: #6ee7b7;
+    --border-color: rgba(52, 211, 153, 0.18);
+    --border-highlight: rgba(52, 211, 153, 0.45);
+    --accent-silver: #d1fae5;
+  }
+
+  [data-theme="sunset"] {
+    --bg-primary: #150a13;
+    --bg-surface: #0a0409;
+    --bg-surface-low: #22101e;
+    --bg-surface-card: rgba(34, 16, 30, 0.78);
+    --bg-surface-high: #361730;
+    --bg-surface-variant: #4a1f42;
+    --primary: #fb7185;
+    --primary-glow: rgba(251, 113, 133, 0.4);
+    --primary-container: #e11d48;
+    --on-primary: #380312;
+    --text-main: #fff1f2;
+    --text-muted: #fecdd3;
+    --text-dim: #fda4af;
+    --border-color: rgba(251, 113, 133, 0.18);
+    --border-highlight: rgba(251, 113, 133, 0.45);
+    --accent-silver: #ffe4e6;
+  }
+}
+
+html, body, #root {
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html[data-theme="dark"], :root {
+  background-color: #000000 !important;
+}
+
+body {
+  transition: background-color 0.35s cubic-bezier(0.16, 1, 0.3, 1), color 0.35s ease;
+  letter-spacing: -0.01em;
+  cursor: auto;
+  min-height: 100vh;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+section[id] {
+  scroll-margin-top: 5rem;
+}
+
+/* Typography Utilities */
+.font-display {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+}
+
+.font-headline {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.font-caps {
+  font-family: 'Space Grotesk', sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.font-sans-clean {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Glassmorphism & Panel Styling */
+.glass-panel {
+  background: var(--bg-surface-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  contain: paint;
+}
+
+.glass-panel:hover {
+  border-color: var(--border-highlight);
+}
+
+.glass-modal {
+  background: rgba(8, 8, 8, 0.94);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid var(--border-color);
+}
+
+/* Modern Pill Buttons */
+.btn-primary {
+  background: var(--primary);
+  color: var(--on-primary);
+  font-family: 'Space Grotesk', sans-serif;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 0.625rem 1.375rem;
+  font-size: 0.8125rem;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  box-shadow: 0 0 25px -5px var(--primary-glow);
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.btn-primary:hover {
+  opacity: 0.94;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 30px 2px var(--primary-glow);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: var(--bg-surface-high);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  font-family: 'Space Grotesk', sans-serif;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+  border-radius: 9999px;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.8125rem;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.btn-secondary:hover {
+  border-color: var(--border-highlight);
+  color: #ffffff;
+  transform: translateY(-1px);
+  background: var(--bg-surface-variant);
+  box-shadow: 0 0 20px -8px rgba(255, 255, 255, 0.25);
+}
+
+.btn-secondary:active {
+  transform: translateY(0);
+}
+
+.btn-icon {
+  background: var(--bg-surface-high);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: 9999px;
+  padding: 0.55rem;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.btn-icon:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  transform: translateY(-1px);
+  background: var(--bg-surface-variant);
+}
+
+/* Custom Scrollbar - Clearly visible, elegant, and interactive */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.7);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.35);
+  border: 2px solid #000000;
+  border-radius: 9999px;
+  transition: background 0.2s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.75);
+}
+/* Firefox scrollbar support */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.35) rgba(0, 0, 0, 0.7);
+}
