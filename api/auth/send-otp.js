@@ -2,17 +2,6 @@ import nodemailer from 'nodemailer';
 import { handleCors, json } from '../_lib/cors.js';
 import { setActiveOtp } from '../_lib/db.js';
 
-let mailTransporter = null;
-if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-  mailTransporter = nodemailer.createTransport({
-    service: process.env.EMAIL_SERVICE || 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS
-    }
-  });
-}
-
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (req.method !== 'POST') {
@@ -25,12 +14,26 @@ export default async function handler(req, res) {
     await setActiveOtp(otp);
 
     const destination = process.env.OWNER_EMAIL || 'adarshsingh98635@gmail.com';
-    let emailSent = false;
+    const emailUser = process.env.EMAIL_USER;
+    const emailPass = process.env.EMAIL_PASS;
 
-    if (mailTransporter) {
+    let emailSent = false;
+    let mailError = null;
+
+    if (emailUser && emailPass) {
       try {
-        await mailTransporter.sendMail({
-          from: `"Adarsh Portfolio Security" <${process.env.EMAIL_USER}>`,
+        const transporter = nodemailer.createTransport({
+          host: 'smtp.gmail.com',
+          port: 465,
+          secure: true,
+          auth: {
+            user: emailUser,
+            pass: emailPass
+          }
+        });
+
+        await transporter.sendMail({
+          from: `"Adarsh Portfolio Security" <${emailUser}>`,
           to: destination,
           subject: `🔐 Your Owner Login Verification OTP: ${otp}`,
           html: `
@@ -50,16 +53,20 @@ export default async function handler(req, res) {
         });
         emailSent = true;
       } catch (err) {
-        console.error('[Nodemailer] Could not send email:', err.message);
+        console.error('[Nodemailer] Could not send email:', err);
+        mailError = err.message;
       }
+    } else {
+      mailError = 'EMAIL_USER or EMAIL_PASS not set on server';
     }
 
     json(res, 200, {
       success: true,
       message: emailSent
-        ? 'A 6-digit verification code has been dispatched to your registered email.'
-        : 'A 6-digit security OTP has been generated.',
+        ? `A 6-digit verification code has been dispatched to ${destination}.`
+        : `OTP generated (${otp}), but email could not be delivered: ${mailError || 'Unknown error'}. You can use your Master Passkey to enter directly.`,
       emailSent,
+      mailError: emailSent ? null : mailError,
       expiresInSeconds: 300
     });
   } catch (e) {
