@@ -334,7 +334,10 @@ function extractResumeFields(rawText) {
         if (cleanTitle.length >= 3 && !/^(built|used|developed|implemented|tech\s*stack|overview|description|features)/i.test(cleanTitle)) {
           if (curProj?.title) extractedProjects.push(curProj);
 
-          const lineTech = extractedSkills.filter(s => new RegExp(`\\b${s}\\b`, 'i').test(line));
+          const lineTech = extractedSkills.filter(s => {
+            const esc = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp(`(?:^|[^a-zA-Z0-9_#+\\-])${esc}(?:$|[^a-zA-Z0-9_#+\\-])`, 'i').test(line);
+          });
 
           curProj = {
             id: `proj-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
