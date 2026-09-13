@@ -15,7 +15,8 @@ import {
   FileCheck
 } from 'lucide-react';
 
-import { API_BASE_URL } from '../../services/apiConfig';
+import { API_BASE_URL, getApiUrl } from '../../services/apiConfig';
+import { extractTextFromPDF } from '../../services/aiExtractionService';
 
 export default function ResumeUploadModal() {
   const { isResumeModalOpen, setIsResumeModalOpen, applyResumeData, showToast } = usePortfolio();
@@ -53,18 +54,37 @@ export default function ResumeUploadModal() {
       let response;
 
       if (file.name.endsWith('.pdf')) {
-        // Read PDF as base64 — backend handles extraction with pdf-parse
         const arrayBuffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = '';
-        bytes.forEach(b => binary += String.fromCharCode(b));
-        const base64 = btoa(binary);
+        let extractedPdfText = '';
 
-        response = await fetch(`${BACKEND}/api/ai/parse-resume`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pdf: base64 })
-        });
+        try {
+          extractedPdfText = await extractTextFromPDF(arrayBuffer);
+          if (extractedPdfText && extractedPdfText.trim().length > 30) {
+            setResumeText(extractedPdfText);
+          }
+        } catch (clientErr) {
+          console.warn('Client-side PDF extraction fallback:', clientErr.message);
+        }
+
+        if (extractedPdfText && extractedPdfText.trim().length > 30) {
+          response = await fetch(getApiUrl('/api/ai/parse-resume'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: extractedPdfText })
+          });
+        } else {
+          // Read PDF as base64 — backend handles extraction
+          const bytes = new Uint8Array(arrayBuffer);
+          let binary = '';
+          bytes.forEach(b => binary += String.fromCharCode(b));
+          const base64 = btoa(binary);
+
+          response = await fetch(getApiUrl('/api/ai/parse-resume'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pdf: base64 })
+          });
+        }
       } else {
         // TXT / DOCX — read as text
         const text = await file.text();

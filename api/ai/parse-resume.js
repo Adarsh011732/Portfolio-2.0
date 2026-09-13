@@ -61,27 +61,80 @@ export default async function handler(req, res) {
 
 async function parsePDFBase64(base64String) {
   const buffer = Buffer.from(base64String, 'base64');
+
+  // Method 1: Try PDFParse if available in environment
   try {
     const { PDFParse } = await import('pdf-parse');
     const parser = new PDFParse({ data: buffer });
     const textResult = await parser.getText();
     await parser.destroy();
-    return textResult.text || '';
+    if (textResult?.text && textResult.text.trim().length > 20) {
+      return textResult.text;
+    }
   } catch (err) {
-    console.warn('[PDFParse] Primary parser note:', err.message);
-    // Fallback: extract ASCII string tokens from PDF if available
-    const str = buffer.toString('binary');
-    const textChunks = [];
-    const textRegex = /\(([^)]+)\)\s*Tj/g;
-    let match;
-    while ((match = textRegex.exec(str)) !== null) {
-      textChunks.push(match[1]);
-    }
-    if (textChunks.length > 10) {
-      return textChunks.join(' ');
-    }
-    throw err;
+    console.warn('[PDFParse] Worker note (falling back to direct stream parser):', err.message);
   }
+
+  // Method 2: Direct pure Node.js FlateDecode / zlib stream decompressor (100% serverless compatible, no workers needed)
+  try {
+    const zlib = await import('zlib');
+    let extractedText = '';
+    const binaryStr = buffer.toString('binary');
+    
+    // Find all stream blocks in PDF
+    const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+    let match;
+    while ((match = streamRegex.exec(binaryStr)) !== null) {
+      try {
+        const streamBuffer = Buffer.from(match[1], 'binary');
+        const inflated = zlib.inflateSync(streamBuffer).toString('latin1');
+
+        // Match PDF text operators: (string) Tj and [(string)] TJ
+        const tjRegex = /\(([^)\\]*(?:\\.[^)\\]*)*)\)\s*Tj/g;
+        let tjMatch;
+        while ((tjMatch = tjRegex.exec(inflated)) !== null) {
+          extractedText += tjMatch[1].replace(/\\([()\\])/g, '$1') + ' ';
+        }
+
+        const tjArrayRegex = /\[(.*?)\]\s*TJ/g;
+        let tjaMatch;
+        while ((tjaMatch = tjArrayRegex.exec(inflated)) !== null) {
+          const inner = tjaMatch[1];
+          const innerRegex = /\(([^)\\]*(?:\\.[^)\\]*)*)\)/g;
+          let inM;
+          while ((inM = innerRegex.exec(inner)) !== null) {
+            extractedText += inM[1].replace(/\\([()\\])/g, '$1') + ' ';
+          }
+        }
+      } catch {}
+    }
+
+    if (extractedText.trim().length > 30) {
+      return extractedText.trim();
+    }
+  } catch (zlibErr) {
+    console.warn('[Zlib PDF] Note:', zlibErr.message);
+  }
+
+  // Method 3: Uncompressed ASCII scan
+  const rawBinary = buffer.toString('binary');
+  const textChunks = [];
+  const textRegex = /\(([^)\\]*(?:\\.[^)\\]*)*)\)\s*Tj/g;
+  let m;
+  while ((m = textRegex.exec(rawBinary)) !== null) {
+    textChunks.push(m[1].replace(/\\([()\\])/g, '$1'));
+  }
+  if (textChunks.length > 5) {
+    return textChunks.join(' ');
+  }
+
+  // Method 4: Clean string decode fallback
+  const cleanUtf8 = buffer.toString('utf8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s{2,}/g, ' ');
+  if (cleanUtf8.length > 30) {
+    return cleanUtf8;
+  }
+
+  throw new Error('Could not extract readable text from PDF. Please copy and paste the resume text into the text tab.');
 }
 
 function extractResumeFields(rawText) {
