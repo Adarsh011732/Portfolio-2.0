@@ -17,9 +17,38 @@ export default async function handler(req, res) {
       return;
     }
 
-    const destination = process.env.OWNER_EMAIL || 'adarshsingh98635@gmail.com';
-    const emailUser = process.env.EMAIL_USER;
-    const emailPass = process.env.EMAIL_PASS;
+    let emailUser = process.env.EMAIL_USER;
+    let emailPass = process.env.EMAIL_PASS;
+    let destination = process.env.OWNER_EMAIL || 'adarshsingh98635@gmail.com';
+
+    if (!emailUser || !emailPass) {
+      try {
+        const fs = await import('fs');
+        const path = await import('path');
+        const candidates = [
+          path.resolve(process.cwd(), '.env'),
+          path.resolve(process.cwd(), 'backend', '.env')
+        ];
+        for (const p of candidates) {
+          if (fs.existsSync(p)) {
+            const lines = fs.readFileSync(p, 'utf8').split('\n');
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+                const [k, ...v] = trimmed.split('=');
+                if (!process.env[k.trim()]) {
+                  process.env[k.trim()] = v.join('=').trim().replace(/^["']|["']$/g, '');
+                }
+              }
+            }
+            break;
+          }
+        }
+        emailUser = process.env.EMAIL_USER;
+        emailPass = process.env.EMAIL_PASS;
+        destination = process.env.OWNER_EMAIL || 'adarshsingh98635@gmail.com';
+      } catch {}
+    }
 
     if (!emailUser || !emailPass) {
       console.warn('[Contact] Email credentials not configured on server.');
@@ -29,9 +58,7 @@ export default async function handler(req, res) {
     }
 
     const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
+      service: 'gmail',
       auth: {
         user: emailUser,
         pass: emailPass
