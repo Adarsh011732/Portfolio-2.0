@@ -128,9 +128,9 @@ async function parsePDFBase64(base64String) {
     return textChunks.join(' ');
   }
 
-  // Method 4: Clean string decode fallback
+  // Method 4: Clean text scan (only if not raw PDF bytecode)
   const cleanUtf8 = buffer.toString('utf8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s{2,}/g, ' ');
-  if (cleanUtf8.length > 30) {
+  if (cleanUtf8.length > 30 && !cleanUtf8.startsWith('%PDF') && !cleanUtf8.includes('<</') && !cleanUtf8.includes('endobj')) {
     return cleanUtf8;
   }
 
@@ -173,8 +173,18 @@ function extractResumeFields(rawText) {
   let name = null;
   let title = null;
 
+  const isInvalidCandidateHeader = (str) => {
+    if (!str) return true;
+    if (/^(%pdf|<<|\/|obj|endobj|stream|endstream|xref|trailer|startxref)/i.test(str)) return true;
+    if (/[<>{}\[\]\\\/%^~#|=;]/.test(str)) return true;
+    if (!/[a-zA-Z]/.test(str)) return true;
+    return false;
+  };
+
   for (const l of lines.slice(0, 8)) {
+    if (isInvalidCandidateHeader(l)) continue;
     if (!name && l.length >= 2 && l.length <= 50 &&
+        /^[a-zA-Z\s.'\-]+$/.test(l) &&
         !l.includes('@') && !l.includes('http') && !l.match(/^\d/) &&
         !/resume|curriculum|objective|summary|skills|education|experience|projects|phone|email/i.test(l)) {
       name = l;

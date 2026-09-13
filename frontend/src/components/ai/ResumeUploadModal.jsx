@@ -89,7 +89,7 @@ export default function ResumeUploadModal() {
         // TXT / DOCX — read as text
         const text = await file.text();
         setResumeText(text);
-        response = await fetch(`${BACKEND}/api/ai/parse-resume`, {
+        response = await fetch(getApiUrl('/api/ai/parse-resume'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text })
@@ -122,7 +122,7 @@ export default function ResumeUploadModal() {
     setExtractedData(null);
     setParseError('');
     try {
-      const response = await fetch(`${BACKEND}/api/ai/parse-resume`, {
+      const response = await fetch(getApiUrl('/api/ai/parse-resume'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: resumeText })

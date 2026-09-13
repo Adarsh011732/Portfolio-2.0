@@ -1,36 +1,41 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { normalizeTechName } from './githubService';
 import { getApiUrl } from './apiConfig';
 
-// Set worker path from cdnjs
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '3.11.174'}/pdf.worker.min.js`;
+// Set worker path from bundled Vite asset (100% version matched & CORS free)
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 /**
  * Extract raw text from PDF ArrayBuffer
  */
 export async function extractTextFromPDF(arrayBuffer) {
   try {
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const loadingTask = pdfjsLib.getDocument({
+      data: new Uint8Array(arrayBuffer),
+      useSystemFonts: true,
+      isEvalSupported: false
+    });
     const pdf = await loadingTask.promise;
     let fullText = '';
 
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
-      const pageStrings = textContent.items.map(item => item.str);
+      const pageStrings = textContent.items
+        .map(item => ('str' in item ? item.str : ''))
+        .filter(Boolean);
       fullText += pageStrings.join(' ') + '\n\n';
     }
 
-    return fullText;
-  } catch (error) {
-    console.error("PDF extraction error:", error);
-    try {
-      const decoder = new TextDecoder('utf-8');
-      const text = decoder.decode(arrayBuffer);
-      return text.replace(/[^\x20-\x7E\n\r\t]/g, ' ');
-    } catch {
-      throw new Error("Unable to parse PDF text. Please copy & paste your resume text directly.");
+    if (fullText.trim().length > 20) {
+      return fullText;
     }
+    throw new Error("PDF text content is empty or scanned.");
+  } catch (error) {
+    console.warn("PDF extraction notice:", error.message || error);
+    // DO NOT decode raw binary arrayBuffer with TextDecoder, as that exposes binary header tokens like %PDF-1.5
+    throw new Error("Unable to parse PDF directly in browser. Backend fallback will process document.");
   }
 }
 
@@ -110,12 +115,21 @@ export function extractProfileFromText(rawText) {
   let name = "";
   let title = "";
 
-  for (let i = 0; i < Math.min(lines.length, 6); i++) {
+  const isInvalidCandidateHeader = (str) => {
+    if (!str) return true;
+    if (/^(%pdf|<<|\/|obj|endobj|stream|endstream|xref|trailer|startxref)/i.test(str)) return true;
+    if (/[<>{}\[\]\\\/%^~#|=;]/.test(str)) return true;
+    if (!/[a-zA-Z]/.test(str)) return true;
+    return false;
+  };
+
+  for (let i = 0; i < Math.min(lines.length, 8); i++) {
     const l = lines[i];
-    if (l.length >= 2 && l.length < 40 && !l.includes("@") && !l.includes("http") && !l.includes(".com") && !/resume|curriculum|phone|email|education|projects|skills/i.test(l)) {
-      if (!name) {
+    if (isInvalidCandidateHeader(l)) continue;
+    if (l.length >= 2 && l.length < 50 && !l.includes("@") && !l.includes("http") && !l.includes(".com") && !/resume|curriculum|phone|email|education|projects|skills|experience/i.test(l)) {
+      if (!name && /^[a-zA-Z\s.'\-]+$/.test(l)) {
         name = l;
-      } else if (!title && l.length < 50) {
+      } else if (name && !title && l.length < 80) {
         title = l;
       }
     }
