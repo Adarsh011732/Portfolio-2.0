@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { usePortfolio } from '../../context/PortfolioContext';
+import { getApiUrl } from '../../services/apiConfig';
 import { Github, Linkedin, Twitter, Terminal } from '../common/Icons';
 import confetti from 'canvas-confetti';
 import { 
@@ -35,7 +36,7 @@ export default function ContactSection() {
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!formData.name || !formData.email || !formData.message) {
       showToast("Please fill in all required fields", "error");
@@ -43,12 +44,27 @@ export default function ContactSection() {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
+    try {
+      const res = await fetch(getApiUrl('/api/contact'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData)
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok && (data.success !== false)) {
+        confetti({ particleCount: 90, spread: 60, origin: { y: 0.7 } });
+        showToast(`Thank you, ${formData.name}! Your message has been dispatched to my inbox.`);
+        setFormData({ name: '', email: '', subject: '', message: '' });
+      } else {
+        throw new Error(data.error || 'Failed to dispatch message');
+      }
+    } catch (err) {
+      showToast(err.message || "Failed to send message. Please try again.", "error");
+    } finally {
       setIsSubmitting(false);
-      confetti({ particleCount: 90, spread: 60, origin: { y: 0.7 } });
-      showToast(`Thank you, ${formData.name}! Your message has been sent.`);
-      setFormData({ name: '', email: '', subject: '', message: '' });
-    }, 800);
+    }
   };
 
   return (
