@@ -2,7 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useMemo } from '
 import { initialPortfolioData } from '../data/initialPortfolio';
 import { fetchGitHubData, fetchLeetCodeData, fetchCodolioData, fetchCodeforcesData } from '../services/platformDataService';
 import { aggregateCodingStats } from '../services/codingStatsService';
-import { getApiUrl } from '../services/apiConfig';
+import { getApiUrl, apiFetch } from '../services/apiConfig';
+import { sanitizePortfolio } from '../utils/safePortfolio';
 import confetti from 'canvas-confetti';
 
 const PortfolioContext = createContext(null);
@@ -49,7 +50,8 @@ export function PortfolioProvider({ children }) {
             parsed.socials.linkedin = 'https://www.linkedin.com/in/adarsh-singh-6216981b3/';
           }
         }
-        return parsed;
+        // Security: sanitize before anything reaches a render surface
+        return sanitizePortfolio(parsed) || parsed;
       }
     } catch (e) { }
     return initialPortfolioData;
@@ -300,8 +302,10 @@ export function PortfolioProvider({ children }) {
         if (res && res.ok) {
           const remoteData = await res.json();
           if (remoteData && typeof remoteData === 'object' && remoteData.personal) {
-            setPortfolio(remoteData);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(remoteData));
+            // Security: sanitize backend data before rendering / caching
+            const sanitized = sanitizePortfolio(remoteData) || remoteData;
+            setPortfolio(sanitized);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
           }
         }
       } catch (err) {
@@ -313,27 +317,26 @@ export function PortfolioProvider({ children }) {
     loadDynamicPortfolio();
   }, []);
 
-  // Sync state to local storage and persistent backend database
+  // Sync state to local storage (always) and the backend database
+  // SECURITY CHANGE: only Owner Mode writes to the server — visitors'
+  // browsers never persist anything, and saves carry the session cookie
+  // plus the x-portfolio-csrf double-submit header via apiFetch.
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(portfolio));
-      if (isLoadedFromBackend) {
-        fetch(getApiUrl('/api/portfolio'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(portfolio)
-        }).catch(() => {
-          if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-            fetch('http://localhost:3001/api/portfolio', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(portfolio)
-            }).catch(() => {});
-          }
-        });
-      }
     } catch (e) { }
-  }, [portfolio, isLoadedFromBackend]);
+    if (isLoadedFromBackend && isOwnerMode) {
+      apiFetch('/api/portfolio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(portfolio)
+      }).then(res => {
+        if (!res.ok && (res.status === 401 || res.status === 403)) {
+          showToast('🔒 Owner session expired — re-verify to persist changes.', 'error');
+        }
+      }).catch(() => { });
+    }
+  }, [portfolio, isLoadedFromBackend, isOwnerMode]);
 
   useEffect(() => {
     try {
@@ -766,7 +769,8 @@ export function PortfolioProvider({ children }) {
           };
         });
       }
-      return merged;
+      // Security: resume text is untrusted input — sanitize before storing
+      return sanitizePortfolio(merged) || merged;
     });
 
     confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
@@ -782,19 +786,14 @@ export function PortfolioProvider({ children }) {
     localStorage.removeItem(CODING_PLATFORMS_KEY);
     localStorage.removeItem(CODOLIO_KEY);
     localStorage.removeItem(GITHUB_KEY);
-    fetch(getApiUrl('/api/portfolio'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(initialPortfolioData)
-    }).catch(() => {
-      if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-        fetch('http://localhost:3001/api/portfolio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(initialPortfolioData)
-        }).catch(() => {});
-      }
-    });
+    // SECURITY CHANGE: server reset requires an owner session (cookie + CSRF)
+    if (isOwnerMode) {
+      apiFetch('/api/portfolio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(initialPortfolioData)
+      }).catch(() => { });
+    }
     showToast("Reset to clean initial state");
   };
 
@@ -817,7 +816,8 @@ export function PortfolioProvider({ children }) {
   const importJSON = (jsonData) => {
     try {
       const parsed = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
-      if (parsed.portfolio) setPortfolio(parsed.portfolio);
+      // Security: imported files are untrusted — sanitize the portfolio section
+      if (parsed.portfolio) setPortfolio(sanitizePortfolio(parsed.portfolio) || parsed.portfolio);
       if (parsed.codingPlatforms) setCodingPlatforms(parsed.codingPlatforms);
       if (parsed.codolioProfile) setCodolioProfile(parsed.codolioProfile);
       if (parsed.gitHubStats) setGitHubStats(parsed.gitHubStats);

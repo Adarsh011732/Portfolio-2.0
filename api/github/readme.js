@@ -1,14 +1,15 @@
 import { handleCors, json } from '../_lib/cors.js';
+import { validateGitName } from '../_lib/security.js';
 
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
   if (req.method !== 'GET') { json(res, 405, { error: 'Method not allowed' }); return; }
 
   try {
-    const owner = req.query.owner;
-    const repo = req.query.repo;
+    const owner = validateGitName(req.query.owner);
+    const repo = validateGitName(req.query.repo);
     if (!owner || !repo) {
-      json(res, 400, { error: 'owner and repo query params required' });
+      json(res, 400, { error: 'Valid owner and repo query params are required.' });
       return;
     }
 

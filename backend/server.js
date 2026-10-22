@@ -2,7 +2,16 @@ import http from 'http';
 import { URL, fileURLToPath } from 'url';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import nodemailer from 'nodemailer';
+import {
+  sanitizePortfolioPayload,
+  requireOwnerSession,
+  issueSessionCookies,
+  safeCompareOtp,
+  isValidOtp,
+  CSRF_HEADER_NAME
+} from './security.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,13 +56,35 @@ if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
 
 const PORT = process.env.PORT || 3001;
 
-// CORS headers
-const corsHeaders = {
-  'Access-Control-Allow-Origin': process.env.FRONTEND_URL || '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Content-Type': 'application/json'
-};
+// CORS + security headers (strict: wildcard origins are NEVER combined with
+// credentials; same-origin only in production; localhost allowed in dev)
+function buildCorsHeaders(origin) {
+  const headers = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Content-Type': 'application/json'
+  };
+  const configured = (process.env.FRONTEND_URL || '').split(',').map(o => o.trim()).filter(Boolean);
+  if (configured.length) {
+    if (configured.length === 1 && configured[0] === '*') {
+      headers['Access-Control-Allow-Origin'] = '*';
+    } else if (origin && configured.includes(origin)) {
+      headers['Access-Control-Allow-Origin'] = origin;
+      headers['Access-Control-Allow-Credentials'] = 'true';
+      headers['Vary'] = 'Origin';
+    }
+    return headers;
+  }
+  if (process.env.NODE_ENV !== 'production' && origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Credentials'] = 'true';
+    headers['Vary'] = 'Origin';
+  }
+  return headers;
+}
 
 const PORTFOLIO_DATA_PATH = path.resolve(__dirname, 'data', 'portfolio.json');
 
@@ -86,6 +117,22 @@ function saveStoredPortfolio(data) {
 // In-Memory Cache Store (10 minutes default TTL)
 const cacheStore = new Map();
 const CACHE_TTL_MS = 10 * 60 * 1000;
+
+// Simple in-memory rate limiting (local dev server, single instance)
+const rateStore = new Map();
+function checkLocalRateLimit(key, max, windowMs) {
+  const now = Date.now();
+  const entry = rateStore.get(key);
+  if (!entry || now - entry.windowStart > windowMs) {
+    rateStore.set(key, { count: 1, windowStart: now });
+    return { allowed: true, count: 1 };
+  }
+  entry.count += 1;
+  return { allowed: entry.count <= max, count: entry.count };
+}
+function clearLocalRateLimit(key) {
+  rateStore.delete(key);
+}
 
 function getCachedData(key, forceRefresh = false) {
   if (forceRefresh) return null;
@@ -1040,8 +1087,15 @@ function extractResumeFields(rawText) {
 // HTTP Server Dispatcher
 // -------------------------------------------------------------
 const server = http.createServer(async (req, res) => {
+  const corsHeaders = buildCorsHeaders(req.headers.origin);
+
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, corsHeaders);
+    res.writeHead(204, {
+      ...corsHeaders,
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': `Content-Type, ${CSRF_HEADER_NAME}`,
+      'Access-Control-Max-Age': '600'
+    });
     res.end();
     return;
   }
@@ -1062,8 +1116,10 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/portfolio' && req.method === 'GET') {
       const data = getStoredPortfolio();
       if (data) {
+        // Defense-in-depth: sanitize stored data before it reaches any href
+        const sanitized = sanitizePortfolioPayload(data) ?? data;
         res.writeHead(200, corsHeaders);
-        res.end(JSON.stringify(data));
+        res.end(JSON.stringify(sanitized));
       } else {
         res.writeHead(404, corsHeaders);
         res.end(JSON.stringify({ error: 'Portfolio data not found' }));
@@ -1089,13 +1145,22 @@ const server = http.createServer(async (req, res) => {
       });
       req.on('end', () => {
         try {
+          // SECURITY CHANGE: writes require an owner session (HttpOnly cookie + CSRF header)
+          if (!requireOwnerSession(req, res)) return;
           const payload = JSON.parse(body || '{}');
-          if (!payload || typeof payload !== 'object') {
+          if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
             res.writeHead(400, corsHeaders);
             res.end(JSON.stringify({ error: 'Invalid payload' }));
             return;
           }
-          const success = saveStoredPortfolio(payload);
+          // Whitelist the schema + strip hostile content (mass-assignment / stored-XSS guard)
+          const sanitized = sanitizePortfolioPayload(payload);
+          if (!sanitized) {
+            res.writeHead(400, corsHeaders);
+            res.end(JSON.stringify({ error: 'Invalid portfolio payload' }));
+            return;
+          }
+          const success = saveStoredPortfolio(sanitized);
           if (success) {
             res.writeHead(200, corsHeaders);
             res.end(JSON.stringify({ success: true, message: 'Portfolio saved permanently to local storage' }));
@@ -1104,8 +1169,9 @@ const server = http.createServer(async (req, res) => {
             res.end(JSON.stringify({ error: 'Failed to write portfolio data to disk' }));
           }
         } catch (e) {
+          console.error('[POST /api/portfolio]:', e.message);
           res.writeHead(500, corsHeaders);
-          res.end(JSON.stringify({ error: e.message }));
+          res.end(JSON.stringify({ error: 'Failed to save portfolio' }));
         }
       });
       return;
@@ -1129,19 +1195,32 @@ const server = http.createServer(async (req, res) => {
       });
       req.on('end', () => {
         try {
+          // SECURITY CHANGE: certification writes require an owner session + CSRF token
+          if (!requireOwnerSession(req, res)) return;
           const payload = JSON.parse(body || '{}');
           const current = getStoredPortfolio() || {};
           if (Array.isArray(payload.certifications)) {
-            current.certifications = payload.certifications;
+            current.certifications = payload.certifications.slice(0, 300);
           } else if (payload.id) {
             current.certifications = (current.certifications || []).map(c => c.id === payload.id ? { ...c, ...payload } : c);
+          } else {
+            res.writeHead(400, corsHeaders);
+            res.end(JSON.stringify({ error: 'Provide certifications[] or an id to update.' }));
+            return;
           }
-          saveStoredPortfolio(current);
+          const sanitized = sanitizePortfolioPayload(current);
+          if (!sanitized) {
+            res.writeHead(400, corsHeaders);
+            res.end(JSON.stringify({ error: 'Invalid certifications payload' }));
+            return;
+          }
+          saveStoredPortfolio(sanitized);
           res.writeHead(200, corsHeaders);
-          res.end(JSON.stringify({ success: true, certifications: current.certifications }));
+          res.end(JSON.stringify({ success: true, certifications: sanitized.certifications }));
         } catch (e) {
+          console.error('[PUT /api/portfolio/certifications]:', e.message);
           res.writeHead(500, corsHeaders);
-          res.end(JSON.stringify({ error: e.message }));
+          res.end(JSON.stringify({ error: 'Failed to update certifications' }));
         }
       });
       return;
@@ -1186,7 +1265,18 @@ const server = http.createServer(async (req, res) => {
     // 5. Resume AI Parser Endpoint: POST /api/ai/parse-resume
     if (pathname === '/api/ai/parse-resume' && req.method === 'POST') {
       let body = '';
-      req.on('data', chunk => { body += chunk; });
+      let bodySize = 0;
+      const MAX_RESUME_SIZE = 12 * 1024 * 1024; // 12MB cap (previously unbounded)
+      req.on('data', chunk => {
+        bodySize += chunk.length;
+        if (bodySize > MAX_RESUME_SIZE) {
+          res.writeHead(413, corsHeaders);
+          res.end(JSON.stringify({ error: 'Payload too large' }));
+          req.destroy();
+          return;
+        }
+        body += chunk;
+      });
       req.on('end', async () => {
         try {
           const payload = JSON.parse(body || '{}');
@@ -1254,26 +1344,45 @@ const server = http.createServer(async (req, res) => {
       req.on('data', chunk => { body += chunk; });
       req.on('end', async () => {
         try {
-          const otp = Math.floor(100000 + Math.random() * 900000).toString();
-          cacheStore.set('owner_active_otp', { data: otp, timestamp: Date.now() });
+          // Rate limit: 3 OTP requests per 15 minutes
+          const sendLimit = checkLocalRateLimit('otp_send', 3, 15 * 60 * 1000);
+          if (!sendLimit.allowed) {
+            res.writeHead(429, corsHeaders);
+            res.end(JSON.stringify({ success: false, error: 'Too many OTP requests. Please wait a few minutes.' }));
+            return;
+          }
 
+          const otp = crypto.randomInt(100000, 1000000).toString();
+          cacheStore.set('owner_active_otp', { data: otp, timestamp: Date.now() });
+          clearLocalRateLimit('otp_fail');
+
+          // Local dev: the OTP is printed to THIS terminal only —
+          // it is never included in the HTTP response.
           console.log(`\n======================================================`);
           console.log(`🔐 [SECURITY 2-STEP AUTH] Owner Login OTP: ${otp}`);
-          console.log(`   Destination: ${process.env.OWNER_EMAIL || 'adarshsingh98635@gmail.com'}`);
           console.log(`   Expires in 5 minutes.`);
           console.log(`======================================================\n`);
 
-          let emailSent = false;
-          let mailError = null;
+          if (!mailTransporter) {
+            // SECURITY CHANGE: without SMTP the OTP goes to the server terminal
+            // (the owner's own machine) instead of being leaked in the response.
+            res.writeHead(200, corsHeaders);
+            res.end(JSON.stringify({
+              success: true,
+              message: 'SMTP not configured locally — the 6-digit OTP has been printed to the backend server terminal.',
+              emailSent: false,
+              expiresInSeconds: 300
+            }));
+            return;
+          }
 
-          // Deliver email via Nodemailer
-          if (mailTransporter) {
-            try {
-              await mailTransporter.sendMail({
-                from: `"Adarsh Portfolio Security" <${process.env.EMAIL_USER}>`,
-                to: process.env.OWNER_EMAIL || 'adarshsingh98635@gmail.com',
-                subject: `🔐 Your Owner Login Verification OTP: ${otp}`,
-                html: `
+          let emailSent = false;
+          try {
+            await mailTransporter.sendMail({
+              from: `"Adarsh Portfolio Security" <${process.env.EMAIL_USER}>`,
+              to: process.env.OWNER_EMAIL,
+              subject: `🔐 Your Owner Login Verification OTP: ${otp}`,
+              html: `
                   <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
                     <h2 style="color: #4338ca; margin-top: 0;">Portfolio Owner Verification</h2>
                     <p style="color: #475569; font-size: 14px; line-height: 1.6;">
@@ -1287,25 +1396,28 @@ const server = http.createServer(async (req, res) => {
                     </p>
                   </div>
                 `
-              });
-              emailSent = true;
-              console.log(`✉️ [Nodemailer] OTP successfully delivered to ${process.env.OWNER_EMAIL || 'adarshsingh98635@gmail.com'}`);
-            } catch (err) {
-              console.error('[Nodemailer] Could not send email:', err.message);
-              mailError = err.message;
-            }
+            });
+            emailSent = true;
+            console.log('✉️ [Nodemailer] OTP successfully delivered.');
+          } catch (err) {
+            console.error('[Nodemailer] Could not send email:', err.message);
+          }
+
+          if (!emailSent) {
+            res.writeHead(503, corsHeaders);
+            res.end(JSON.stringify({ success: false, error: 'Could not deliver the verification email right now. Please try again shortly.' }));
+            return;
           }
 
           res.writeHead(200, corsHeaders);
           res.end(JSON.stringify({
             success: true,
-            message: emailSent 
-              ? 'A 6-digit verification code has been dispatched to your registered email.' 
-              : 'A 6-digit security OTP has been generated.',
+            message: 'A 6-digit verification code has been dispatched to your registered email.',
             emailSent,
             expiresInSeconds: 300
           }));
         } catch (e) {
+          console.error('[send-otp]:', e.message);
           res.writeHead(500, corsHeaders);
           res.end(JSON.stringify({ error: 'Failed to generate OTP' }));
         }
@@ -1313,40 +1425,63 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 8. Security Auth — Verify OTP / Passkey: POST /api/auth/verify-otp
+    // 8. Security Auth — Verify OTP: POST /api/auth/verify-otp
+    // SECURITY CHANGE: the master-PIN login path (and its hardcoded '9369'
+    // fallback) has been REMOVED. The 6-digit OTP is the only login method.
     if (pathname === '/api/auth/verify-otp' && req.method === 'POST') {
       let body = '';
-      req.on('data', chunk => { body += chunk; });
+      let bodySize = 0;
+      req.on('data', chunk => {
+        bodySize += chunk.length;
+        if (bodySize > 16 * 1024) { req.destroy(); return; }
+        body += chunk;
+      });
       req.on('end', () => {
         try {
           const payload = JSON.parse(body || '{}');
-          const submittedCode = (payload.code || payload.otp || '').trim();
-          const masterPin = (payload.pin || '').trim();
+          const submittedCode = String(payload.code ?? '').trim();
+
+          if (!isValidOtp(submittedCode)) {
+            res.writeHead(400, corsHeaders);
+            res.end(JSON.stringify({ success: false, error: 'Enter the 6-digit code from the server console or your email.' }));
+            return;
+          }
+
+          // Brute-force lockout: 5 failed attempts per 15 minutes
+          const fail = checkLocalRateLimit('otp_fail', 5, 15 * 60 * 1000);
+          if (!fail.allowed) {
+            res.writeHead(429, corsHeaders);
+            res.end(JSON.stringify({ success: false, error: 'Too many failed attempts. Request a new OTP and try again.' }));
+            return;
+          }
 
           const stored = cacheStore.get('owner_active_otp');
           const validOtp = stored ? stored.data : null;
 
-          const currentPasskey = process.env.OWNER_PASSKEY || '9369';
-
-          // Validate against active OTP or configured passkey
-          if ((validOtp && submittedCode === validOtp) || submittedCode === currentPasskey || masterPin === currentPasskey) {
-            // Invalidate single-use OTP
-            cacheStore.delete('owner_active_otp');
-
-            res.writeHead(200, corsHeaders);
+          if (!validOtp || !safeCompareOtp(submittedCode, validOtp)) {
+            res.writeHead(401, corsHeaders);
             res.end(JSON.stringify({
-              success: true,
-              authenticated: true,
-              token: `owner_token_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-              message: 'Authentication successful. Welcome back!'
+              success: false,
+              error: 'Invalid or expired verification code. Please try again.'
             }));
             return;
           }
 
-          res.writeHead(401, corsHeaders);
+          // Invalidate single-use OTP + reset the attempt counter
+          cacheStore.delete('owner_active_otp');
+          clearLocalRateLimit('otp_fail');
+
+          // Mint a real server-side session: HttpOnly HMAC cookie + CSRF pair
+          const { token, csrf } = issueSessionCookies(res, { secure: process.env.NODE_ENV === 'production' });
+
+          res.writeHead(200, corsHeaders);
           res.end(JSON.stringify({
-            success: false,
-            error: 'Invalid or expired verification code / passkey. Please try again.'
+            success: true,
+            authenticated: true,
+            token,
+            csrfToken: csrf,
+            expiresIn: 28800,
+            message: 'Authentication successful. Welcome back!'
           }));
         } catch (e) {
           res.writeHead(400, corsHeaders);
@@ -1357,56 +1492,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     // 9. Security Auth — Reset Passkey: POST /api/auth/reset-passkey
+    // SECURITY CHANGE: session-gated; stored as a scrypt hash; secrets are
+    // never written to disk from code; the passkey is not a login method.
     if (pathname === '/api/auth/reset-passkey' && req.method === 'POST') {
       let body = '';
       req.on('data', chunk => { body += chunk; });
       req.on('end', () => {
         try {
+          if (!requireOwnerSession(req, res)) return;
           const payload = JSON.parse(body || '{}');
-          const otp = (payload.otp || '').trim();
           const newPasskey = (payload.newPasskey || '').trim();
-
-          const stored = cacheStore.get('owner_active_otp');
-          const validOtp = stored ? stored.data : null;
-
-          if (!newPasskey || newPasskey.length < 4) {
+          if (newPasskey.length < 8) {
             res.writeHead(400, corsHeaders);
-            res.end(JSON.stringify({ error: 'New passkey must be at least 4 characters.' }));
+            res.end(JSON.stringify({ error: 'New passkey must be at least 8 characters.' }));
             return;
           }
-
-          // Must verify OTP to authorize passkey reset
-          if (!validOtp || otp !== validOtp) {
-            res.writeHead(401, corsHeaders);
-            res.end(JSON.stringify({ error: 'Invalid or expired OTP. Please request a new OTP to reset your passkey.' }));
-            return;
-          }
-
-          // Invalidate OTP
-          cacheStore.delete('owner_active_otp');
-          process.env.OWNER_PASSKEY = newPasskey;
-
-          // Persist to .env if file exists
-          try {
-            const saveEnvPath = activeEnvPath || path.resolve(__dirname, '.env');
-            if (fs.existsSync(saveEnvPath)) {
-              let envContent = fs.readFileSync(saveEnvPath, 'utf8');
-              if (envContent.includes('OWNER_PASSKEY=')) {
-                envContent = envContent.replace(/OWNER_PASSKEY=.*/g, `OWNER_PASSKEY=${newPasskey}`);
-              } else {
-                envContent += `\nOWNER_PASSKEY=${newPasskey}\n`;
-              }
-              fs.writeFileSync(saveEnvPath, envContent, 'utf8');
-            }
-          } catch (e) {}
-
-          console.log('🔐 [SECURITY] Master passkey successfully updated.');
-
+          const salt = crypto.randomBytes(16).toString('hex');
+          const hash = crypto.scryptSync(newPasskey, salt, 32).toString('hex');
+          cacheStore.set('owner_passkey_hash', { data: `${salt}:${hash}`, timestamp: Date.now() });
+          console.log('🔐 [SECURITY] Master passkey updated (stored as scrypt hash; login is OTP-only).');
           res.writeHead(200, corsHeaders);
-          res.end(JSON.stringify({
-            success: true,
-            message: 'Master passkey updated successfully!'
-          }));
+          res.end(JSON.stringify({ success: true, message: 'Master passkey updated successfully!' }));
         } catch (e) {
           res.writeHead(500, corsHeaders);
           res.end(JSON.stringify({ error: 'Failed to reset passkey' }));
@@ -1421,7 +1527,7 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     console.error(`API Error on ${pathname}:`, err.message);
     res.writeHead(500, corsHeaders);
-    res.end(JSON.stringify({ error: err.message || 'Internal server error' }));
+    res.end(JSON.stringify({ error: 'Internal server error' }));
   }
 });
 

@@ -1,5 +1,6 @@
 import { handleCors, json } from '../_lib/cors.js';
 import { getCachedData, setCachedData } from '../_lib/db.js';
+import { validateUsername } from '../_lib/security.js';
 
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -7,6 +8,11 @@ export default async function handler(req, res) {
 
   try {
     const { username } = req.query;
+    // Block path-segment / URL injection into upstream API calls
+    if (!validateUsername(username)) {
+      json(res, 400, { error: 'Invalid username.' });
+      return;
+    }
     const forceRefresh = req.query.refresh === 'true';
     const data = await fetchLeetCodeProfile(username, forceRefresh);
     json(res, 200, data);

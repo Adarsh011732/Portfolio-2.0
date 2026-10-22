@@ -125,6 +125,7 @@ export async function setStoredPasskey(passkey) {
 
 const cacheStore = new Map();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const MAX_CACHE_ENTRIES = 500;
 
 export function getCachedData(key, forceRefresh = false) {
   if (forceRefresh) return null;
@@ -136,5 +137,32 @@ export function getCachedData(key, forceRefresh = false) {
 }
 
 export function setCachedData(key, data) {
+  // Bound the cache so hostile key variety cannot grow memory without limit
+  if (cacheStore.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = cacheStore.keys().next().value;
+    cacheStore.delete(oldestKey);
+  }
   cacheStore.set(key, { data, timestamp: Date.now() });
+}
+
+// ─── Rate Limiting (MongoDB-backed, serverless safe) ────────
+
+export async function getRateLimit(key) {
+  const { db } = await connectToDatabase();
+  const doc = await db.collection('rate_limits').findOne({ _id: key });
+  return doc ? { count: doc.count, windowStart: doc.windowStart } : null;
+}
+
+export async function setRateLimit(key, state) {
+  const { db } = await connectToDatabase();
+  await db.collection('rate_limits').updateOne(
+    { _id: key },
+    { $set: { count: state.count, windowStart: state.windowStart } },
+    { upsert: true }
+  );
+}
+
+export async function clearRateLimit(key) {
+  const { db } = await connectToDatabase();
+  await db.collection('rate_limits').deleteOne({ _id: key });
 }

@@ -1,5 +1,6 @@
 import { handleCors, json } from '../_lib/cors.js';
 import { getCachedData, setCachedData } from '../_lib/db.js';
+import { validateUsername } from '../_lib/security.js';
 
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -8,7 +9,7 @@ export default async function handler(req, res) {
   try {
     const handle = req.query?.handle || req.url.split('/').pop().split('?')[0];
     const forceRefresh = req.query?.refresh === 'true';
-    if (!handle) {
+    if (!handle || !validateUsername(handle)) {
       json(res, 400, { error: 'Codeforces handle is required' });
       return;
     }

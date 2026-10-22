@@ -51,9 +51,11 @@ cp backend/.env.example backend/.env
 In `backend/.env`, configure:
 - `PORT=3001`
 - `OWNER_EMAIL=your_email@gmail.com`
-- `OWNER_PASSKEY=your_secret_pin`
+- `SESSION_SECRET=long_random_string (min 32 chars — generate: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))")`
 - `EMAIL_USER=your_email@gmail.com`
 - `EMAIL_PASS=your_gmail_app_password`
+
+> Note: the legacy master-PIN login has been removed. Email OTP is the only owner authentication method.
 
 ### 3. Start Development Servers
 ```bash
@@ -88,10 +90,11 @@ This repository is pre-configured with `vercel.json` and a serverless `api/` dir
    - In **Settings → Environment Variables**, add:
      - `MONGODB_URI`: `mongodb+srv://...`
      - `OWNER_EMAIL`: Your email address (e.g. `adarshsingh98635@gmail.com`)
-     - `OWNER_PASSKEY`: Your secure owner passkey (default: `9369`)
-     - `EMAIL_USER`: (Optional) Your Gmail address for sending OTP emails
-     - `EMAIL_PASS`: (Optional) 16-character Google App Password
-     - `EMAIL_SERVICE`: `gmail`
+      - `SESSION_SECRET`: **Required** — long random string (min 32 chars). Generate with `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`
+      - `EMAIL_USER`: Your Gmail address for sending OTP emails (required for owner login)
+      - `EMAIL_PASS`: 16-character Google App Password (required for owner login)
+      - `EMAIL_SERVICE`: `gmail`
+      - `FRONTEND_URL`: Leave unset for the standard single-domain setup (same-origin only)
    - Click **Deploy**!
    - Everything (SPA frontend + all `/api/*` serverless functions) will be live under your Vercel URL with 0 additional backend hosts needed.
 
@@ -106,9 +109,9 @@ This repository is pre-configured with `vercel.json` and a serverless `api/` dir
 4. **Start Command**: `npm start`
 5. **Environment Variables**:
    - `PORT`: `3001`
-   - `FRONTEND_URL`: Your deployed frontend URL or `*`
-   - `OWNER_EMAIL`: Your registered email for 2-Step OTP
-   - `OWNER_PASSKEY`: Your master PIN / passkey
+    - `SESSION_SECRET`: **Required** — long random string (min 32 chars)
+    - `FRONTEND_URL`: Your deployed frontend URL (exact origin — never `*`)
+    - `OWNER_EMAIL`: Your registered email for OTP delivery
    - `EMAIL_USER`: Your Gmail address
    - `EMAIL_PASS`: 16-character Google App Password
    - `EMAIL_SERVICE`: `gmail`
@@ -123,5 +126,10 @@ This repository is pre-configured with `vercel.json` and a serverless `api/` dir
 ## 🔒 Security Best Practices
 
 - All `.env`, `.env.*`, and secret credential files across root, `frontend/`, and `backend/` are strictly excluded from git via [.gitignore](.gitignore).
-- Master passkeys and SMTP credentials remain exclusively on the server backend and are never exposed to client-side bundles.
-- Nodemailer sends single-use time-limited OTPs (5 minutes) for owner authorization and passkey resetting.
+- **OTP-only owner authentication**: login requires a single-use, 5-minute email OTP. The legacy master-PIN path (a brute-forceable shared secret) has been removed entirely.
+- **Server-side sessions**: successful OTP verification mints an HMAC-signed, HttpOnly, Secure, SameSite cookie plus a double-submit CSRF token. All mutating endpoints (`POST /api/portfolio`, certification updates, passkey management) require this session — visitors can never write data.
+- **Payload sanitization**: every portfolio write is whitelisted to the documented schema, length-capped, and deep-sanitized (dangerous `javascript:`/`data:` URLs are stripped) on both the server and the client, killing mass-assignment and stored-XSS vectors.
+- **Rate limiting**: OTP requests (3/15 min), failed verifications (5/15 min → lockout), contact form (5/hour/IP), and resume parsing (10/hour/IP) are all throttled.
+- **Strict CORS**: same-origin by default; wildcard origins are never combined with credentials.
+- **Security headers**: CSP, HSTS, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and `Cross-Origin-Opener-Policy` are applied to every response via `vercel.json`.
+- Run the regression suite any time: `node tests/security.test.mjs`.

@@ -15,7 +15,8 @@
     "start": "npm start --prefix backend",
     "lint": "npm run lint --prefix frontend",
     "install:all": "npm install --prefix frontend && npm install --prefix backend",
-    "db:seed": "node backend/scripts/seed-mongodb.js"
+    "db:seed": "node backend/scripts/seed-mongodb.js",
+    "test:security": "node tests/security.test.mjs"
   },
   "dependencies": {
     "mongodb": "^7.6.0",

@@ -1,6 +1,25 @@
+import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { handleCors, readBody, json } from '../_lib/cors.js';
-import { getActiveOtp, setActiveOtp, deleteActiveOtp, getStoredPasskey, setStoredPasskey } from '../_lib/db.js';
+import {
+  getActiveOtp, setActiveOtp, deleteActiveOtp, setStoredPasskey,
+  getRateLimit, setRateLimit, clearRateLimit
+} from '../_lib/db.js';
+import {
+  isValidOtp, safeCompareOtp, evaluateRateLimit,
+  issueSessionCookies, requireOwnerSession, isValidEmail
+} from '../_lib/security.js';
+
+const OTP_SEND_LIMITS = { max: 3, windowMs: 15 * 60 * 1000 };
+const OTP_FAIL_LIMITS = { max: 5, windowMs: 15 * 60 * 1000 };
+const SESSION_TTL_SECONDS = 8 * 3600;
+
+async function applyRateLimit(key, limits) {
+  const state = await getRateLimit(key);
+  const result = evaluateRateLimit(state, limits);
+  await setRateLimit(key, result.state);
+  return result;
+}
 
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -12,140 +31,167 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 1. Send OTP
+  // ------------------------------------------------------------------ send-otp
   if (action === 'send-otp') {
     try {
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      await setActiveOtp(otp);
+      const limit = await applyRateLimit('otp_send', OTP_SEND_LIMITS);
+      if (!limit.allowed) {
+        json(res, 429, { success: false, error: 'Too many OTP requests. Please wait a few minutes before requesting another code.' });
+        return;
+      }
 
-      const destination = process.env.OWNER_EMAIL || 'adarshsingh98635@gmail.com';
+      const destination = process.env.OWNER_EMAIL;
       const emailUser = process.env.EMAIL_USER;
       const emailPass = process.env.EMAIL_PASS;
 
-      let emailSent = false;
-      let mailError = null;
-
-      if (emailUser && emailPass) {
-        try {
-          const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-              user: emailUser,
-              pass: emailPass
-            }
-          });
-
-          await transporter.sendMail({
-            from: `"Adarsh Portfolio Security" <${emailUser}>`,
-            to: destination,
-            subject: `🔐 Your Owner Login Verification OTP: ${otp}`,
-            html: `
-              <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
-                <h2 style="color: #4338ca; margin-top: 0;">Portfolio Owner Verification</h2>
-                <p style="color: #475569; font-size: 14px; line-height: 1.6;">
-                  A request was received to access Owner Mode for your portfolio. Use the single-use 6-digit OTP below to authenticate.
-                </p>
-                <div style="background-color: #f8fafc; border: 2px dashed #6366f1; border-radius: 12px; padding: 16px; text-align: center; margin: 20px 0;">
-                  <span style="font-family: monospace; font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #1e1b4b;">${otp}</span>
-                </div>
-                <p style="color: #94a3b8; font-size: 12px; margin-bottom: 0;">
-                  This OTP is valid for 5 minutes. If you did not initiate this request, no action is needed.
-                </p>
-              </div>
-            `
-          });
-          emailSent = true;
-        } catch (err) {
-          console.error('[Nodemailer] Could not send email:', err);
-          mailError = err.message;
-        }
-      } else {
-        mailError = 'EMAIL_USER or EMAIL_PASS not set on server';
+      if (!destination || !isValidEmail(destination)) {
+        json(res, 500, { success: false, error: 'Owner email is not configured on the server.' });
+        return;
       }
 
-      json(res, 200, {
-        success: true,
-        message: emailSent
-          ? `A 6-digit verification code has been dispatched to ${destination}.`
-          : `OTP generated (${otp}). You can use your Master Passkey to enter directly.`,
-        emailSent,
-        mailError: emailSent ? null : mailError,
-        expiresInSeconds: 300
-      });
-    } catch (e) {
-      json(res, 500, { error: 'Failed to generate OTP: ' + e.message });
-    }
-    return;
-  }
+      if (!emailUser || !emailPass) {
+        // NEVER return the OTP to the client: without SMTP the owner login is
+        // unavailable, full stop. (The old build leaked the OTP right here.)
+        json(res, 503, { success: false, error: 'Email delivery is not configured on the server. Owner login is unavailable until EMAIL_USER and EMAIL_PASS are set.' });
+        return;
+      }
 
-  // 2. Verify OTP / Passkey
-  if (action === 'verify-otp') {
-    try {
-      const body = await readBody(req, 64 * 1024);
-      const payload = JSON.parse(body || '{}');
-      const submittedCode = (payload.code || payload.otp || '').trim();
-      const masterPin = (payload.pin || '').trim();
+      const otp = crypto.randomInt(100000, 1000000).toString();
+      await deleteActiveOtp(); // invalidate any previous code first
+      await setActiveOtp(otp);
 
-      const validOtp = await getActiveOtp();
-      const dbPasskey = await getStoredPasskey();
-      const currentPasskey = dbPasskey || process.env.OWNER_PASSKEY || '926485';
+      try {
+        const transporter = nodemailer.createTransport({
+          service: process.env.EMAIL_SERVICE || 'gmail',
+          auth: { user: emailUser, pass: emailPass }
+        });
 
-      if ((validOtp && submittedCode === validOtp) || submittedCode === currentPasskey || masterPin === currentPasskey) {
-        if (validOtp && submittedCode === validOtp) {
-          await deleteActiveOtp();
-        }
+        await transporter.sendMail({
+          from: `"Adarsh Portfolio Security" <${emailUser}>`,
+          to: destination,
+          subject: `🔐 Your Owner Login Verification OTP: ${otp}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
+              <h2 style="color: #4338ca; margin-top: 0;">Portfolio Owner Verification</h2>
+              <p style="color: #475569; font-size: 14px; line-height: 1.6;">
+                A request was received to access Owner Mode for your portfolio. Use the single-use 6-digit OTP below to authenticate.
+              </p>
+              <div style="background-color: #f8fafc; border: 2px dashed #6366f1; border-radius: 12px; padding: 16px; text-align: center; margin: 20px 0;">
+                <span style="font-family: monospace; font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #1e1b4b;">${otp}</span>
+              </div>
+              <p style="color: #94a3b8; font-size: 12px; margin-bottom: 0;">
+                This OTP is valid for 5 minutes. If you did not initiate this request, no action is needed.
+              </p>
+            </div>
+          `
+        });
+
+        // A freshly delivered code gives the owner a clean attempt slate
+        await clearRateLimit('otp_fail');
 
         json(res, 200, {
           success: true,
-          authenticated: true,
-          token: `owner_token_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-          message: 'Authentication successful. Welcome back!'
+          message: `A 6-digit verification code has been dispatched to ${destination}.`,
+          expiresInSeconds: 300
         });
-        return;
+      } catch (err) {
+        console.error('[Nodemailer] OTP delivery failed:', err.message);
+        json(res, 503, { success: false, error: 'Could not deliver the verification email right now. Please try again shortly.' });
       }
-
-      json(res, 401, {
-        success: false,
-        error: 'Invalid or expired verification code / passkey. Please try again.'
-      });
     } catch (e) {
-      json(res, 400, { error: 'Invalid verification payload: ' + e.message });
+      console.error('[auth send-otp]:', e.message);
+      json(res, 500, { success: false, error: 'Failed to generate OTP.' });
     }
     return;
   }
 
-  // 3. Reset Passkey
-  if (action === 'reset-passkey') {
+  // ---------------------------------------------------------------- verify-otp
+  if (action === 'verify-otp') {
+    let payload = {};
     try {
-      const body = await readBody(req, 64 * 1024);
-      const payload = JSON.parse(body || '{}');
-      const otp = (payload.otp || '').trim();
-      const newPasskey = (payload.newPasskey || '').trim();
+      const body = await readBody(req, 16 * 1024);
+      payload = JSON.parse(body || '{}');
+    } catch {
+      json(res, 400, { success: false, error: 'Invalid request payload.' });
+      return;
+    }
 
-      const validOtp = await getActiveOtp();
+    // SECURITY CHANGE: the legacy master-PIN login path has been REMOVED.
+    // The 6-digit email OTP is the only way to authenticate as the owner.
+    // Any 'pin'/'masterPin' fields in the payload are ignored.
+    const submittedCode = String(payload.code ?? '').trim();
 
-      if (!newPasskey || newPasskey.length < 4) {
-        json(res, 400, { error: 'New passkey must be at least 4 characters.' });
+    if (!isValidOtp(submittedCode)) {
+      json(res, 400, { success: false, error: 'Enter the 6-digit code from your email.' });
+      return;
+    }
+
+    try {
+      const failLimit = await applyRateLimit('otp_fail', OTP_FAIL_LIMITS);
+      if (!failLimit.allowed) {
+        json(res, 429, { success: false, error: 'Too many failed attempts. Please request a new code and try again.' });
         return;
       }
 
-      if (!validOtp || otp !== validOtp) {
-        json(res, 401, { error: 'Invalid or expired OTP. Please request a new OTP to reset your passkey.' });
+      const validOtp = await getActiveOtp();
+      if (!validOtp || !safeCompareOtp(submittedCode, validOtp)) {
+        json(res, 401, { success: false, error: 'Invalid or expired verification code. Please try again.' });
         return;
       }
 
       await deleteActiveOtp();
-      await setStoredPasskey(newPasskey);
+      await clearRateLimit('otp_fail');
+
+      // Mint a real server-side session: HttpOnly HMAC cookie + CSRF pair
+      const { token, csrf } = issueSessionCookies(res, { secure: true }); // serverless is always HTTPS
 
       json(res, 200, {
         success: true,
-        message: 'Master passkey updated successfully!'
+        authenticated: true,
+        token,
+        csrfToken: csrf,
+        expiresIn: SESSION_TTL_SECONDS,
+        message: 'Authentication successful. Welcome back!'
       });
     } catch (e) {
-      json(res, 500, { error: 'Failed to reset passkey: ' + e.message });
+      console.error('[auth verify-otp]:', e.message);
+      json(res, 500, { success: false, error: 'Verification failed. Please try again.' });
     }
     return;
   }
 
-  json(res, 404, { error: `Unknown auth action "${action}"` });
+  // ------------------------------------------------------------- reset-passkey
+  // Session-gated (owner must already be OTP-verified). The passkey is stored
+  // as a scrypt hash — never plaintext — and is no longer a login method.
+  if (action === 'reset-passkey') {
+    if (!requireOwnerSession(req, res)) return;
+
+    let payload = {};
+    try {
+      const body = await readBody(req, 16 * 1024);
+      payload = JSON.parse(body || '{}');
+    } catch {
+      json(res, 400, { success: false, error: 'Invalid request payload.' });
+      return;
+    }
+
+    const newPasskey = String(payload.newPasskey ?? '').trim();
+    if (newPasskey.length < 8) {
+      json(res, 400, { success: false, error: 'New passkey must be at least 8 characters.' });
+      return;
+    }
+
+    try {
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = crypto.scryptSync(newPasskey, salt, 32).toString('hex');
+      await setStoredPasskey(`${salt}:${hash}`);
+      json(res, 200, { success: true, message: 'Master passkey updated successfully!' });
+    } catch (e) {
+      console.error('[auth reset-passkey]:', e.message);
+      json(res, 500, { success: false, error: 'Failed to reset passkey.' });
+    }
+    return;
+  }
+
+  json(res, 404, { error: 'Unknown auth action.' });
 }

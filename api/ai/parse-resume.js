@@ -1,4 +1,8 @@
 import { handleCors, readBody, json } from '../_lib/cors.js';
+import { getRateLimit, setRateLimit } from '../_lib/db.js';
+import { evaluateRateLimit, getClientIp } from '../_lib/security.js';
+
+const RESUME_LIMITS = { max: 10, windowMs: 60 * 60 * 1000 }; // 10 parse requests per hour per IP
 
 // Polyfill DOM globals required by pdfjs-dist inside pdf-parse in Node.js / Serverless environments
 if (typeof globalThis.DOMMatrix === 'undefined') {
@@ -37,14 +41,29 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Per-IP rate limit on this public AI endpoint (abuse / resource-exhaustion guard)
+    const ip = getClientIp(req);
+    const rateKey = `resume:${ip}`;
+    const state = await getRateLimit(rateKey);
+    const limit = evaluateRateLimit(state, RESUME_LIMITS);
+    await setRateLimit(rateKey, limit.state);
+    if (!limit.allowed) {
+      json(res, 429, { error: 'Too many resume parse requests. Please try again later.' });
+      return;
+    }
+
     const body = await readBody(req, 10 * 1024 * 1024); // up to 10MB for base64 PDF
     const payload = JSON.parse(body || '{}');
     let rawText = '';
 
     if (payload.pdf) {
+      if (typeof payload.pdf !== 'string' || payload.pdf.length > 11 * 1024 * 1024) {
+        json(res, 400, { error: 'PDF payload too large or malformed.' });
+        return;
+      }
       rawText = await parsePDFBase64(payload.pdf);
     } else {
-      rawText = payload.text || '';
+      rawText = typeof payload.text === 'string' ? payload.text.slice(0, 200 * 1024) : '';
     }
 
     if (!rawText.trim()) {

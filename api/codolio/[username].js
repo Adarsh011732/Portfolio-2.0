@@ -1,6 +1,7 @@
 import { handleCors, json } from '../_lib/cors.js';
 import { getCachedData, setCachedData } from '../_lib/db.js';
 import { fetchLeetCodeProfile } from '../leetcode/[username].js';
+import { validateUsername } from '../_lib/security.js';
 
 export default async function handler(req, res) {
   if (handleCors(req, res)) return;
@@ -9,7 +10,7 @@ export default async function handler(req, res) {
   try {
     const username = req.query?.username || req.url.split('/').pop().split('?')[0];
     const forceRefresh = req.query?.refresh === 'true';
-    if (!username) {
+    if (!username || !validateUsername(username)) {
       json(res, 400, { error: 'Codolio username is required' });
       return;
     }

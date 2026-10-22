@@ -5,15 +5,25 @@
 
 export class AIService {
   static getApiKey() {
-    return localStorage.getItem('studio_gemini_api_key') || '';
+    // Session-scoped storage only: the key never persists beyond the tab,
+    // and any legacy localStorage copy is purged.
+    try { localStorage.removeItem('studio_gemini_api_key'); } catch { /* ignore */ }
+    try {
+      return sessionStorage.getItem('studio_gemini_api_key') || '';
+    } catch {
+      return '';
+    }
   }
 
   static setApiKey(key) {
-    if (key) {
-      localStorage.setItem('studio_gemini_api_key', key.trim());
-    } else {
+    try {
+      if (key) {
+        sessionStorage.setItem('studio_gemini_api_key', key.trim());
+      } else {
+        sessionStorage.removeItem('studio_gemini_api_key');
+      }
       localStorage.removeItem('studio_gemini_api_key');
-    }
+    } catch { /* storage unavailable */ }
   }
 
   /**
@@ -39,9 +49,9 @@ ${JSON.stringify({
   education: portfolioData.education
 }, null, 2)}`;
 
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+        const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { responseMimeType: "application/json" }
@@ -101,9 +111,9 @@ ${JSON.stringify({
         const prompt = `Rewrite the following student developer portfolio bio in a ${tone.toUpperCase()} tone (approx 45-70 words). Highlight technical ambition, machine learning, software engineering, and learning agility:
 "${currentBio}"`;
 
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+        const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
           body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
         });
 
@@ -185,9 +195,9 @@ Question: ${question}
 
 Response (keep to 2-3 crisp sentences):`;
 
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+        const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
           body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
         });
 
