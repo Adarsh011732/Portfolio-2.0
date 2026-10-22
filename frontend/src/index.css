@@ -260,3 +260,17 @@ section[id] {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.35) rgba(0, 0, 0, 0.7);
 }
+
+/* ==========================================================================
+   Reduced motion (OS accessibility setting): CSS animations/transitions pause.
+   The WebGL canvases honor this separately by freezing their motion while
+   keeping the full visual composition rendered.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -463,14 +463,43 @@ export default function FloatingTechBackground() {
     const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 1000);
     camera.position.set(0, 0, 28);
 
-    // 2. High-Performance WebGL Renderer (1.5 DPR capped to eliminate fillrate lag)
+    // 2. Battery-friendly WebGL renderer
+    //    - low-power: prefers the integrated GPU on dual-GPU laptops (massive
+    //      battery saving; this scene is all MeshBasicMaterial — no dGPU needed)
+    //    - antialias off: full-screen MSAA is invisible on pre-rendered textures
+    //      and is the single most expensive GPU option here.
     const renderer = new THREE.WebGLRenderer({
       alpha: true,
-      antialias: true,
-      powerPreference: 'high-performance'
+      antialias: false,
+      powerPreference: 'low-power'
     });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+
+    // Adaptive resolution: starts at the display DPR (capped 1.5) and drops to
+    // 1.0 when the GPU is slow (battery saver / thermal throttling). Motion
+    // stays time-accurate via the frame-budgeted loop below.
+    let dprCap = Math.min(window.devicePixelRatio || 1, 1.5);
+    const applyPixelRatio = () => renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
+    applyPixelRatio();
+
+    // Battery awareness (Chromium): start at the lean resolution while discharging
+    let onBattery = false;
+    if (typeof navigator.getBattery === 'function') {
+      navigator.getBattery().then((batt) => {
+        onBattery = batt.discharging;
+        if (onBattery) { dprCap = 1.0; applyPixelRatio(); }
+        if (typeof batt.addEventListener === 'function') {
+          batt.addEventListener('dischargingchange', () => {
+            onBattery = batt.discharging;
+            dprCap = batt.discharging ? 1.0 : Math.min(window.devicePixelRatio || 1, 1.5);
+            applyPixelRatio();
+          });
+        }
+      }).catch(() => {});
+    }
+
+    const prefersReducedMotion =
+      typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
@@ -582,45 +611,81 @@ export default function FloatingTechBackground() {
     window.addEventListener('mousemove', handleMouseMove, { passive: true });
     window.addEventListener('scroll', handleScroll, { passive: true });
 
-    // 8. Window Resize Handling
+    // Cache the page height: reading documentElement.scrollHeight inside the
+    // animation loop forces a layout read EVERY frame (a major main-thread cost
+    // while the CPU is throttled on battery). Recomputed only when the document
+    // actually changes size.
+    let maxScroll = 1;
+    const recomputeMaxScroll = () => {
+      maxScroll = Math.max(document.documentElement.scrollHeight - window.innerHeight, 1);
+    };
+    recomputeMaxScroll();
+    let pageHeightObserver = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      pageHeightObserver = new ResizeObserver(recomputeMaxScroll);
+      pageHeightObserver.observe(document.documentElement);
+    }
+
+    // 8. Window Resize Handling (debounced — resize event storms are expensive)
+    let resizeTimer = null;
     const handleResize = () => {
-      if (!container) return;
-      width = window.innerWidth;
-      height = window.innerHeight;
-      camera.aspect = width / height;
-      camera.position.z = width < 1280 ? 36 : 32;
-      camera.updateProjectionMatrix();
-      renderer.setSize(width, height);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (!container) return;
+        width = window.innerWidth;
+        height = window.innerHeight;
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+        applyPixelRatio();
+        recomputeMaxScroll();
+      }, 150);
     };
 
     window.addEventListener('resize', handleResize);
 
-    // 9. Silky Smooth 60 FPS Animation Loop - Moving Background with 1:1 Scroll Synchronization
+    // 9. Frame-budgeted animation loop. 30fps is visually identical for this
+    //    slow ambient motion but halves GPU/CPU work — critical on battery.
     const clock = new THREE.Clock();
     let animId;
     let isVisible = true;
 
     const handleVisibilityChange = () => {
       isVisible = !document.hidden;
-      if (isVisible) clock.start();
+      if (isVisible) {
+        clock.start();
+        lastRenderAt = 0;
+      }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    const animate = () => {
+    const FRAME_INTERVAL = 1000 / 30;
+    let lastRenderAt = -FRAME_INTERVAL;
+
+    // Adaptive quality: exponential moving average of render cost
+    let frameCostAvg = 12;
+    let lastQualityCheck = 0;
+
+    const animate = (now = 0) => {
       animId = requestAnimationFrame(animate);
 
       if (!isVisible) return;
 
+      // 30fps cap with drift correction (keeps motion speed exact)
+      if (now - lastRenderAt < FRAME_INTERVAL - 1.5) return;
+      lastRenderAt = now - ((now - lastRenderAt) % FRAME_INTERVAL);
+
+      const frameStart = performance.now();
       const delta = Math.min(clock.getDelta(), 0.05);
-      const elapsed = clock.getElapsedTime();
+      // prefers-reduced-motion: the composition stays fully visible but static
+      // (camera still tracks scroll/mouse); motion is frozen at its rest pose.
+      const elapsed = prefersReducedMotion ? 0 : clock.getElapsedTime();
 
       // Smooth camera mouse follow with buttery damping
       currentMouseX += (targetMouseX - currentMouseX) * (delta * 3.0);
       currentMouseY += (targetMouseY - currentMouseY) * (delta * 3.0);
 
-      // Seamless 1:1 Scroll Synchronization across entire page height
-      const maxScroll = Math.max(document.documentElement.scrollHeight - window.innerHeight, 1);
+      // Seamless 1:1 Scroll Synchronization (cached page height — zero layout reads per frame)
       const scrollFraction = Math.min(Math.max(targetScrollY / maxScroll, 0), 1);
       const scrollY3D = - (scrollFraction * 46.0);
 
@@ -647,6 +712,21 @@ export default function FloatingTechBackground() {
       });
 
       renderer.render(scene, camera);
+
+      // Adaptive resolution: sustained >24ms render cost -> drop to DPR 1.0;
+      // recover when the device is fast again (and not on battery).
+      const cost = performance.now() - frameStart;
+      frameCostAvg = frameCostAvg * 0.92 + cost * 0.08;
+      if (now - lastQualityCheck > 2000) {
+        lastQualityCheck = now;
+        if (frameCostAvg > 24 && dprCap > 1.0) {
+          dprCap = 1.0;
+          applyPixelRatio();
+        } else if (frameCostAvg < 12 && !onBattery && dprCap < Math.min(window.devicePixelRatio || 1, 1.5)) {
+          dprCap = Math.min(window.devicePixelRatio || 1, 1.5);
+          applyPixelRatio();
+        }
+      }
     };
 
     animate();
@@ -658,6 +738,8 @@ export default function FloatingTechBackground() {
       window.removeEventListener('scroll', handleScroll);
       window.removeEventListener('resize', handleResize);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (resizeTimer) clearTimeout(resizeTimer);
+      if (pageHeightObserver) pageHeightObserver.disconnect();
 
       texturePool.forEach(tex => tex.dispose());
       badgeDataList.forEach(item => {

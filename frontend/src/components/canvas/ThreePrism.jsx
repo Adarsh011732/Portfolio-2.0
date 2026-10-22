@@ -98,15 +98,29 @@ export default function ThreePrism() {
     let targetX = 0;
     let targetY = 0;
 
+    const prefersReducedMotion =
+      typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Cached bounding rect: getBoundingClientRect() per mousemove is a layout
+    // read firing 60-125x/sec. Recompute only when geometry can change
+    // (scroll moves the viewport-relative rect, resize changes its size).
+    let cachedRect = null;
+    let rectDirty = true;
+    const invalidateRect = () => { rectDirty = true; };
+
     const handleMouseMove = (e) => {
-      const rect = container.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width - 0.5;
-      const y = (e.clientY - rect.top) / rect.height - 0.5;
+      if (rectDirty || !cachedRect) {
+        cachedRect = container.getBoundingClientRect();
+        rectDirty = false;
+      }
+      const x = (e.clientX - cachedRect.left) / cachedRect.width - 0.5;
+      const y = (e.clientY - cachedRect.top) / cachedRect.height - 0.5;
       targetX = x * 1.5;
       targetY = -y * 1.5;
     };
 
     window.addEventListener('mousemove', handleMouseMove, { passive: true });
+    window.addEventListener('scroll', invalidateRect, { passive: true });
 
     // Responsive window resize
     const handleResize = () => {
@@ -139,23 +153,30 @@ export default function ThreePrism() {
     );
     observer.observe(container);
 
-    // Silky smooth animation loop
+    // Silky smooth animation loop (delta-time based: identical speed at any fps)
+    const clock = new THREE.Clock();
     function animate() {
       animId = requestAnimationFrame(animate);
       if (!isVisible || !isIntersecting) return;
 
-      // Smooth mouse follow with damping
-      mouseX += (targetX - mouseX) * 0.05;
-      mouseY += (targetY - mouseY) * 0.05;
+      const delta = Math.min(clock.getDelta(), 0.05);
+      const damp = 1 - Math.pow(0.95, delta * 60);
 
-      // Original hypnotic rotation speeds
-      outerPrism.rotation.x += 0.003;
-      outerPrism.rotation.y += 0.005;
+      // Smooth mouse follow with damping (frame-rate independent)
+      mouseX += (targetX - mouseX) * damp;
+      mouseY += (targetY - mouseY) * damp;
 
-      innerCore.rotation.x -= 0.006;
-      innerCore.rotation.y -= 0.004;
+      // Original hypnotic rotation speeds, converted to per-second rates
+      // (0.003/frame @60fps -> 0.18 rad/s, etc.) so the motion stays time-accurate
+      // even when the OS throttles rAF on battery saver.
+      const step = prefersReducedMotion ? 0 : delta;
+      outerPrism.rotation.x += 0.18 * step;
+      outerPrism.rotation.y += 0.30 * step;
 
-      ring.rotation.z += 0.002;
+      innerCore.rotation.x -= 0.36 * step;
+      innerCore.rotation.y -= 0.24 * step;
+
+      ring.rotation.z += 0.12 * step;
 
       // Original group transforms
       group.rotation.y = mouseX * 0.5;
@@ -171,6 +192,7 @@ export default function ThreePrism() {
       cancelAnimationFrame(animId);
       observer.disconnect();
       window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('scroll', invalidateRect);
       window.removeEventListener('resize', handleResize);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
 
