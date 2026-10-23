@@ -35,6 +35,7 @@ export async function fetchGitHubData(username, forceRefresh = false) {
     },
     activity: Array.isArray(data.activity) ? data.activity : [],
     detectedTechnologies: Array.isArray(data.detectedTechnologies) ? data.detectedTechnologies : [],
+    languageBreakdown: Array.isArray(data.languageBreakdown) ? data.languageBreakdown : [],
     projects: Array.isArray(data.projects) ? data.projects : [],
     lastUpdated: data.lastUpdated ?? new Date().toISOString()
   };

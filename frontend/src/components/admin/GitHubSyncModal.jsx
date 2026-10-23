@@ -17,6 +17,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import { getApiUrl } from '../../services/apiConfig';
+import { githubLanguageColor } from '../../services/skillLevels';
 
 export default function GitHubSyncModal() {
   const { 
@@ -272,6 +273,36 @@ export default function GitHubSyncModal() {
                       <span key={tech} className="px-2.5 py-0.5 rounded-lg bg-[var(--primary)]/10 text-[var(--primary)] text-[11px] font-mono border border-[var(--primary)]/20">
                         {tech}
                       </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Real Language Composition (live GitHub data) */}
+              {gitHubStats.languageBreakdown && gitHubStats.languageBreakdown.length > 0 && (
+                <div className="pt-1">
+                  <span className="text-[10px] font-caps uppercase tracking-wider text-[var(--text-dim)] font-bold block mb-2">
+                    Language Composition — Live GitHub Data ({gitHubStats.languageBreakdown.filter(l => l.name !== 'Other').length} languages)
+                  </span>
+                  <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                    {gitHubStats.languageBreakdown.slice(0, 10).map(lang => (
+                      <div key={lang.name} className="flex items-center gap-2 text-[10px] font-mono">
+                        <span
+                          className="w-1.5 h-1.5 rounded-full shrink-0"
+                          style={{ backgroundColor: githubLanguageColor(lang.name) }}
+                        />
+                        <span className="text-[var(--text-main)] truncate max-w-[110px] shrink-0">{lang.name}</span>
+                        <div className="flex-1 h-1.5 bg-[var(--bg-surface-high)] rounded-full overflow-hidden min-w-[60px]">
+                          <div
+                            className="h-full rounded-full transition-all duration-700"
+                            style={{
+                              width: `${Math.max(lang.percentage, 1)}%`,
+                              backgroundColor: githubLanguageColor(lang.name)
+                            }}
+                          />
+                        </div>
+                        <span className="text-[var(--text-dim)] w-11 text-right shrink-0">{lang.percentage}%</span>
+                      </div>
                     ))}
                   </div>
                 </div>

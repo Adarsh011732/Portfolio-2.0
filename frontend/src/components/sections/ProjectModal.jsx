@@ -11,14 +11,23 @@ import {
   MonitorPlay,
   Code2,
   Calendar,
-  Tag
+  Tag,
+  Trash2
 } from 'lucide-react';
 
 export default function ProjectModal() {
-  const { portfolio, selectedProject, setSelectedProject } = usePortfolio();
+  const { portfolio, selectedProject, setSelectedProject, isOwnerMode, deleteProject, showToast } = usePortfolio();
   const [showLivePreview, setShowLivePreview] = useState(false);
 
   if (!selectedProject) return null;
+
+  const handleDeleteProject = () => {
+    if (window.confirm(`Remove "${selectedProject.title}" from your portfolio?`)) {
+      deleteProject(selectedProject.id);
+      setSelectedProject(null);
+      showToast(`Project removed: ${selectedProject.title}`);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-xl flex justify-center p-4 md:p-6 animate-in fade-in duration-200">
@@ -221,9 +230,21 @@ export default function ProjectModal() {
 
         {/* Bottom Action Footer */}
         <div className="flex items-center justify-between px-6 md:px-8 py-3.5 border-t border-[var(--border-color)] bg-[var(--bg-surface)] shrink-0">
-          <span className="font-mono text-[11px] text-[var(--text-dim)]">
-            {portfolio.personal.name} &bull; Case Study
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-[11px] text-[var(--text-dim)]">
+              {portfolio.personal.name} &bull; Case Study
+            </span>
+            {isOwnerMode && (
+              <button
+                onClick={handleDeleteProject}
+                className="text-[11px] !py-1.5 !px-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 flex items-center gap-1.5 transition-all font-medium"
+                title="Remove this project from your portfolio"
+              >
+                <Trash2 size={12} />
+                <span>Remove</span>
+              </button>
+            )}
+          </div>
           <button
             onClick={() => setSelectedProject(null)}
             className="btn-secondary text-xs !py-1.5 !px-4"

@@ -321,6 +321,9 @@ async function fetchGitHubProfileAndRepos(username, forceRefresh = false) {
     };
   });
 
+  // Real language composition across the user's own repositories
+  const languageBreakdown = await aggregateRepoLanguages(cleanUser, ownRepos);
+
   const result = {
     platform: 'github',
     username: cleanUser,
@@ -347,6 +350,7 @@ async function fetchGitHubProfileAndRepos(username, forceRefresh = false) {
       followers: userData.followers ?? 0,
       commits: totalCommits
     },
+    languageBreakdown,
     activity,
     detectedTechnologies: Array.from(detectedTechSet),
     projects: formattedProjects,
@@ -1081,6 +1085,71 @@ function extractResumeFields(rawText) {
     education: extractedEducation,
     certifications: extractedCertifications
   };
+}
+
+// -------------------------------------------------------------
+// Real Language Analytics: aggregate GitHub's per-repo language
+// byte counts into a profile-wide percentage breakdown.
+// -------------------------------------------------------------
+const languageCache = new Map();
+const LANGUAGE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_LANG_REPOS = 30;
+
+function githubApiHeaders() {
+  const headers = { 'User-Agent': 'Developer-Portfolio-App' };
+  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  return headers;
+}
+
+async function aggregateRepoLanguages(owner, repos) {
+  const cacheKey = `${owner.toLowerCase()}_langs`;
+  const cached = languageCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < LANGUAGE_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const ranked = [...repos]
+    .sort((a, b) =>
+      ((b.stargazers_count ?? 0) - (a.stargazers_count ?? 0)) ||
+      String(b.pushed_at ?? '').localeCompare(String(a.pushed_at ?? ''))
+    )
+    .slice(0, MAX_LANG_REPOS);
+
+  const totals = new Map();
+  const BATCH = 6;
+  for (let i = 0; i < ranked.length; i += BATCH) {
+    const batch = ranked.slice(i, i + BATCH);
+    const results = await Promise.all(batch.map(async (repo) => {
+      try {
+        const r = await fetch(`https://api.github.com/repos/${owner}/${repo.name}/languages`, { headers: githubApiHeaders() });
+        if (!r.ok) return {};
+        return await r.json();
+      } catch {
+        return {};
+      }
+    }));
+    for (const langObj of results) {
+      for (const [lang, bytes] of Object.entries(langObj)) {
+        if (typeof bytes === 'number' && bytes > 0) totals.set(lang, (totals.get(lang) || 0) + bytes);
+      }
+    }
+  }
+
+  const totalBytes = Array.from(totals.values()).reduce((a, b) => a + b, 0);
+  if (!totalBytes) return [];
+
+  const sorted = Array.from(totals.entries())
+    .map(([name, bytes]) => ({ name, bytes, percentage: Math.round((bytes / totalBytes) * 1000) / 10 }))
+    .sort((a, b) => b.bytes - a.bytes);
+
+  let breakdown = sorted.slice(0, 15).map(e => ({ ...e }));
+  if (sorted.length > 15) {
+    const restBytes = sorted.slice(15).reduce((a, e) => a + e.bytes, 0);
+    breakdown.push({ name: 'Other', bytes: restBytes, percentage: Math.round((restBytes / totalBytes) * 1000) / 10 });
+  }
+
+  languageCache.set(cacheKey, { data: breakdown, timestamp: Date.now() });
+  return breakdown;
 }
 
 // -------------------------------------------------------------

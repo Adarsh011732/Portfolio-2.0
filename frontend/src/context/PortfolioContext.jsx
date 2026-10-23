@@ -4,6 +4,7 @@ import { fetchGitHubData, fetchLeetCodeData, fetchCodolioData, fetchCodeforcesDa
 import { aggregateCodingStats } from '../services/codingStatsService';
 import { getApiUrl, apiFetch } from '../services/apiConfig';
 import { sanitizePortfolio } from '../utils/safePortfolio';
+import { applyRealLevelsToSkills, assignSkillLevels, buildStaticLevelMap } from '../services/skillLevels';
 import confetti from 'canvas-confetti';
 
 const PortfolioContext = createContext(null);
@@ -398,6 +399,13 @@ export function PortfolioProvider({ children }) {
           const ghData = await fetchGitHubData(activeGitHub);
           if (ghData) {
             setGitHubStats(ghData);
+            // Real skill levels from live GitHub language analytics (silent)
+            if (Array.isArray(ghData.languageBreakdown) && ghData.languageBreakdown.length > 0) {
+              setPortfolio(prev => ({
+                ...prev,
+                skills: applyRealLevelsToSkills(prev.skills, ghData.languageBreakdown)
+              }));
+            }
           }
         } catch (e) { }
       }
@@ -549,6 +557,14 @@ export function PortfolioProvider({ children }) {
       const data = await fetchGitHubData(usernameOrUrl, true);
       setGitHubStats(data);
 
+      // Real skill levels: apply live GitHub language percentages to the skills grid
+      if (Array.isArray(data.languageBreakdown) && data.languageBreakdown.length > 0) {
+        setPortfolio(prev => ({
+          ...prev,
+          skills: applyRealLevelsToSkills(prev.skills, data.languageBreakdown)
+        }));
+      }
+
       setPortfolio(prev => ({
         ...prev,
         personal: {
@@ -563,7 +579,7 @@ export function PortfolioProvider({ children }) {
       }));
 
       confetti({ particleCount: 70, spread: 60 });
-      showToast(`GitHub synced: ${data.stats.repositories} repos, ${data.detectedTechnologies.length} technologies detected. Select repos to add below.`);
+      showToast(`GitHub synced: ${data.stats.repositories} repos • real language analytics applied.`);
       return data;
     } catch (err) {
       showToast(err.message || 'Failed to sync GitHub profile', 'error');
@@ -742,11 +758,14 @@ export function PortfolioProvider({ children }) {
         merged.socials = { ...merged.socials, ...extracted.socials };
       }
       if (extracted.skills && extracted.skills.length > 0) {
+        // Real levels: live GitHub language percentages where measurable,
+        // curated initial-portfolio levels as fallback — never a flat invented number.
+        const staticMap = buildStaticLevelMap(initialPortfolioData.skills);
         merged.skills = [
           {
             category: "Verified Technologies",
-            description: "Extracted from verified profile & documents.",
-            skills: extracted.skills.map(name => ({ name, level: 90, highlight: true }))
+            description: "Extracted from verified profile & documents — percentages marked with a green dot are measured from live GitHub language analytics.",
+            skills: assignSkillLevels(extracted.skills, gitHubStats?.languageBreakdown, staticMap)
           }
         ];
       }

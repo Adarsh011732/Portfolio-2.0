@@ -8,7 +8,8 @@ import {
   Sparkles,
   Layers,
   Code2,
-  FolderPlus
+  FolderPlus,
+  Trash2
 } from 'lucide-react';
 
 export default function ProjectsSection() {
@@ -18,9 +19,19 @@ export default function ProjectsSection() {
     setActiveCategory, 
     setSelectedProject, 
     isOwnerMode,
+    deleteProject,
+    showToast,
     setIsAddProjectModalOpen,
     setIsGitHubModalOpen
   } = usePortfolio();
+
+  const handleDeleteProject = (e, project) => {
+    e.stopPropagation();
+    if (window.confirm(`Remove "${project.title}" from your portfolio?`)) {
+      deleteProject(project.id);
+      showToast(`Project removed: ${project.title}`);
+    }
+  };
 
   const { projects, categories } = portfolio;
 
@@ -153,6 +164,15 @@ export default function ProjectsSection() {
                       >
                         <ExternalLink size={13} />
                       </a>
+                    )}
+                    {isOwnerMode && (
+                      <button
+                        onClick={(e) => handleDeleteProject(e, project)}
+                        className="p-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
+                        title="Remove Project (Owner Mode)"
+                      >
+                        <Trash2 size={13} />
+                      </button>
                     )}
                   </div>
                 </div>

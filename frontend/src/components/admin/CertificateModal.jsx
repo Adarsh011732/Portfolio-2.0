@@ -123,12 +123,26 @@ export default function CertificateModal() {
       return;
     }
 
+    // Silent link validation: a message is only shown when the link is invalid
+    const trimmedCredentialUrl = credentialUrl.trim();
+    if (trimmedCredentialUrl) {
+      if (isGoogleDriveUrl(trimmedCredentialUrl)) {
+        if (!extractGoogleDriveId(trimmedCredentialUrl)) {
+          showToast('Invalid Google Drive link — use Share > "Copy link" in Drive and paste it again.', 'error');
+          return;
+        }
+      } else if (!/^https?:\/\/\S+\.\S+/i.test(trimmedCredentialUrl)) {
+        showToast('Certificate link must be a valid URL starting with http:// or https://', 'error');
+        return;
+      }
+    }
+
     const newCert = {
       id: `cert-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: certName.trim(),
       issuer: issuer.trim() || 'Certificate Issuer',
       date: issueDate.trim() || new Date().getFullYear().toString(),
-      credentialUrl: credentialUrl.trim(),
+      credentialUrl: trimmedCredentialUrl,
       skills: skills ? skills.split(',').map(s => s.trim()).filter(Boolean) : [],
       previewImage: filePreview || null
     };
@@ -161,11 +175,25 @@ export default function CertificateModal() {
     const cert = certificates.find(c => c.id === certId);
     if (!cert) return;
 
+    // Silent link validation: a message is only shown when the link is invalid
+    const trimmedEditLink = editLinkValue.trim();
+    if (trimmedEditLink) {
+      if (isGoogleDriveUrl(trimmedEditLink)) {
+        if (!extractGoogleDriveId(trimmedEditLink)) {
+          showToast('Invalid Google Drive link — use Share > "Copy link" in Drive and paste it again.', 'error');
+          return;
+        }
+      } else if (!/^https?:\/\/\S+\.\S+/i.test(trimmedEditLink)) {
+        showToast('Certificate link must be a valid URL starting with http:// or https://', 'error');
+        return;
+      }
+    }
+
     const updated = {
       ...cert,
       name: editNameValue.trim() || cert.name,
       issuer: editIssuerValue.trim() || cert.issuer,
-      credentialUrl: editLinkValue.trim()
+      credentialUrl: trimmedEditLink
     };
 
     updateCertification(certId, updated);
@@ -174,7 +202,6 @@ export default function CertificateModal() {
   };
 
   const certificates = portfolio.certifications || [];
-  const isDrive = isGoogleDriveUrl(credentialUrl);
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-xl flex justify-center p-4 md:p-6 animate-in fade-in duration-200">
@@ -396,12 +423,6 @@ export default function CertificateModal() {
                       <label className="block text-xs font-bold text-[var(--text-dim)] uppercase">
                         Certificate Link (Google Drive / Verification URL)
                       </label>
-                      {isDrive && (
-                        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 font-bold flex items-center gap-1">
-                          <CheckCircle2 size={11} />
-                          <span>Google Drive Link Detected</span>
-                        </span>
-                      )}
                     </div>
                     
                     <div className="relative flex items-center">
@@ -594,11 +615,6 @@ export default function CertificateModal() {
                                 <LinkIcon size={12} />
                                 <span>Attach / Update Certificate Link</span>
                               </span>
-                              {isGoogleDriveUrl(editLinkValue) && (
-                                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 font-bold">
-                                  Google Drive Link
-                                </span>
-                              )}
                             </div>
 
                             <div className="space-y-2">

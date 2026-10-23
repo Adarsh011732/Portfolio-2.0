@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { usePortfolio } from '../../context/PortfolioContext';
-import { isGoogleDriveUrl, getGoogleDriveEmbedUrl } from '../../utils/googleDrive';
+import { isGoogleDriveUrl, extractGoogleDriveId, getGoogleDriveDirectUrl, getGoogleDriveEmbedUrl } from '../../utils/googleDrive';
 import { 
   GraduationCap, 
   Award, 
@@ -53,9 +53,27 @@ export default function EducationSection() {
     if (!selectedCert) return;
 
     const trimmedLink = certLinkInput.trim();
+
+    // Silent validation: a message is only shown when the link is invalid.
+    if (trimmedLink) {
+      if (isGoogleDriveUrl(trimmedLink)) {
+        const driveId = extractGoogleDriveId(trimmedLink);
+        if (!driveId) {
+          showToast('Invalid Google Drive link — use Share > "Copy link" in Drive and paste it again.', 'error');
+          return;
+        }
+      } else if (!/^https?:\/\/\S+\.\S+/i.test(trimmedLink)) {
+        showToast('Link must be a valid URL starting with http:// or https://', 'error');
+        return;
+      }
+    }
+
     const updated = {
       ...selectedCert,
-      credentialUrl: trimmedLink
+      // Normalize Drive links to the canonical shareable form so the embedded preview always works
+      credentialUrl: isGoogleDriveUrl(trimmedLink) && extractGoogleDriveId(trimmedLink)
+        ? getGoogleDriveDirectUrl(trimmedLink)
+        : trimmedLink
     };
 
     updateCertification(selectedCert.id, updated);
@@ -430,30 +448,17 @@ export default function EducationSection() {
                 </div>
 
                 {isOwnerMode && isEditingLink ? (
-                  <form onSubmit={handleSaveCertificateLink} className="space-y-2">
+                  <form id="cert-link-form" onSubmit={handleSaveCertificateLink} className="space-y-2">
                     <div className="relative flex items-center">
                       <input
                         type="url"
                         value={certLinkInput}
                         onChange={(e) => setCertLinkInput(e.target.value)}
                         placeholder="Paste Google Drive link: https://drive.google.com/file/d/..."
-                        className="w-full bg-[var(--bg-surface-high)] border border-[var(--border-color)] rounded-xl pl-3.5 pr-20 py-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:border-[var(--primary)] font-mono"
+                        className="w-full bg-[var(--bg-surface-high)] border border-[var(--border-color)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-main)] focus:outline-none focus:border-[var(--primary)] font-mono"
                         autoFocus
                       />
-                      <button
-                        type="submit"
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 btn-primary text-[10px] !py-1 !px-3 font-bold flex items-center gap-1"
-                      >
-                        <Check size={11} />
-                        <span>Save</span>
-                      </button>
                     </div>
-                    {isGoogleDriveUrl(certLinkInput) && (
-                      <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1">
-                        <CheckCircle2 size={11} />
-                        <span>Google Drive format detected</span>
-                      </span>
-                    )}
                     <p className="text-[10px] text-[var(--text-dim)] font-mono">
                       Tip: In Google Drive, click Share &gt; "Anyone with the link can view", then copy link.
                     </p>
@@ -475,17 +480,8 @@ export default function EducationSection() {
                       </a>
                     </div>
                   ) : (
-                    <div className="bg-[var(--bg-surface-high)] p-2.5 rounded-xl border border-white/5 text-xs font-mono text-[var(--text-dim)] flex items-center justify-between">
+                    <div className="bg-[var(--bg-surface-high)] p-2.5 rounded-xl border border-white/5 text-xs font-mono text-[var(--text-dim)]">
                       <span className="text-[11px]">No direct document link attached yet</span>
-                      {isOwnerMode && (
-                        <button
-                          onClick={() => setIsEditingLink(true)}
-                          className="text-[10px] font-mono text-[var(--primary)] hover:underline flex items-center gap-1 font-semibold"
-                        >
-                          <Plus size={11} />
-                          <span>Attach Link</span>
-                        </button>
-                      )}
                     </div>
                   )
                 )}
@@ -516,7 +512,16 @@ export default function EducationSection() {
                   )}
                 </div>
 
-                {selectedCert.credentialUrl && selectedCert.credentialUrl !== '#' ? (
+                {isOwnerMode && isEditingLink ? (
+                  <button
+                    type="submit"
+                    form="cert-link-form"
+                    className="btn-primary text-xs !py-2 !px-5 flex items-center gap-2 font-bold shadow-lg shadow-[var(--primary)]/20"
+                  >
+                    <Check size={13} />
+                    <span>Save Link</span>
+                  </button>
+                ) : selectedCert.credentialUrl && selectedCert.credentialUrl !== '#' ? (
                   <a
                     href={selectedCert.credentialUrl}
                     target="_blank"

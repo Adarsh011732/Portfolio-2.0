@@ -49,7 +49,8 @@ export default function SkillsSection() {
             Capabilities & Technical Stack
           </h2>
           <p className="font-sans text-sm md:text-base text-[var(--text-muted)] max-w-2xl leading-relaxed">
-            Technologies and frameworks inferred from GitHub repositories and active projects.
+            Skill percentages marked with a <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 align-middle mx-0.5" /> dot are
+            real — measured from the live language composition of my GitHub repositories.
           </p>
         </div>
 
@@ -158,15 +159,21 @@ export default function SkillsSection() {
                         )}
                         {skill.name}
                       </span>
-                      <span className="text-[10px] font-mono text-[var(--text-dim)]">
-                        {skill.level || 90}%
+                      <span className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--text-dim)]">
+                        {skill.verified && (
+                          <span
+                            className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"
+                            title="Verified: measured from live GitHub language analytics"
+                          />
+                        )}
+                        <span>{skill.level != null ? `${skill.level}%` : '—'}</span>
                       </span>
                     </div>
 
                     <div className="w-full h-1.5 bg-[var(--bg-surface-high)] rounded-full overflow-hidden">
                       <div
                         className="h-full bg-gradient-to-r from-[var(--primary-container)] to-[var(--primary)] rounded-full transition-all duration-700 group-hover:shadow-[0_0_10px_var(--primary-glow)]"
-                        style={{ width: `${skill.level || 90}%` }}
+                        style={{ width: `${skill.level != null ? skill.level : 0}%` }}
                       />
                     </div>
                   </div>
