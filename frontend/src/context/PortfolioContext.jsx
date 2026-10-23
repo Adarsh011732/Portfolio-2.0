@@ -15,6 +15,22 @@ const CODING_PLATFORMS_KEY = 'portfolio_coding_platforms_v8';
 const CODOLIO_KEY = 'portfolio_codolio_data_v8';
 const GITHUB_KEY = 'portfolio_github_data_v8';
 
+/**
+ * Resolves the GitHub handle to connect: the socials URL if it contains a
+ * sane username, otherwise the last synced username, otherwise the default.
+ * Guards against truncated/junk URLs (e.g. "github.com/2") silently pointing
+ * the site at a stranger's account.
+ */
+function resolveGitHubHandle(socialUrl, storedUsername) {
+  const fromSocial = String(socialUrl || '')
+    .replace(/^@/, '')
+    .replace(/^https?:\/\/(www\.)?github\.com\//i, '')
+    .replace(/\/.*$/, '')
+    .trim();
+  if (/^[A-Za-z0-9-]{3,39}$/.test(fromSocial)) return fromSocial;
+  return storedUsername || 'AdarshSingh001';
+}
+
 export function PortfolioProvider({ children }) {
   const [portfolio, setPortfolio] = useState(() => {
     try {
@@ -392,8 +408,9 @@ export function PortfolioProvider({ children }) {
         } catch (e) { }
       }
 
-      // 3. GitHub — fetch using stored handle
-      const activeGitHub = portfolio.socials?.github || gitHubStats?.username || 'AdarshSingh001';
+      // 3. GitHub — fetch using stored handle (sticky: sane socials URL wins,
+      //    then the last synced username, then the default — never junk)
+      const activeGitHub = resolveGitHubHandle(portfolio.socials?.github, gitHubStats?.username);
       if (activeGitHub) {
         try {
           const ghData = await fetchGitHubData(activeGitHub);
@@ -755,7 +772,20 @@ export function PortfolioProvider({ children }) {
         merged.personal = { ...merged.personal, ...extracted.personal };
       }
       if (extracted.socials) {
-        merged.socials = { ...merged.socials, ...extracted.socials };
+        // Validated merge: never overwrite a good connection with parser-truncated
+        // URLs (e.g. "github.com/2") — the user's GitHub link changes only on
+        // an explicit manual sync.
+        const nextSocials = { ...merged.socials };
+        for (const [key, value] of Object.entries(extracted.socials)) {
+          if (typeof value !== 'string' || !value.trim() || !/^https?:\/\//i.test(value)) continue;
+          if (key === 'github') {
+            const m = value.match(/github\.com\/([A-Za-z0-9-]{3,39})\/?$/i);
+            if (m) nextSocials.github = `https://github.com/${m[1]}`;
+          } else {
+            nextSocials[key] = value;
+          }
+        }
+        merged.socials = nextSocials;
       }
       if (extracted.skills && extracted.skills.length > 0) {
         // Real levels: live GitHub language percentages where measurable,

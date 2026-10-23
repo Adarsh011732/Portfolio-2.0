@@ -135,6 +135,17 @@ export function sanitizePortfolioPayload(payload) {
         out.socials[k] = sanitizeExternalUrl(v) ?? '';
       }
     }
+    // Parser-junk guard: truncated GitHub URLs (e.g. github.com/2) must never
+    // persist — they silently reconnect the site to a stranger's account.
+    if (typeof out.socials.github === 'string' && out.socials.github) {
+      const ghUser = out.socials.github
+        .replace(/^https?:\/\/(www\.)?github\.com\//i, '')
+        .replace(/\/.*$/, '')
+        .trim();
+      if (!/^[A-Za-z0-9-]{3,39}$/.test(ghUser)) {
+        out.socials.github = '';
+      }
+    }
   }
   return out;
 }

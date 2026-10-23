@@ -111,6 +111,17 @@ await test('sanitizePortfolioPayload: array caps + control-char stripping', () =
   assert.ok(!dirty.personal.name.includes('\u0007'), 'control char survived');
 });
 
+await test('socials guard: truncated GitHub URL (github.com/2) rejected, valid link kept', () => {
+  const out = sanitizePortfolioPayload({
+    socials: { github: 'https://github.com/2', leetcode: 'https://leetcode.com/u/Adarsh_Singh_001/' }
+  });
+  assert.strictEqual(out.socials.github, '', 'truncated github URL survived — stranger-account bug!');
+  assert.ok(out.socials.leetcode.startsWith('https://'), 'legit leetcode link was dropped');
+
+  const ok = sanitizePortfolioPayload({ socials: { github: 'https://github.com/AdarshSingh001' } });
+  assert.ok(ok.socials.github.startsWith('https://github.com/Adarsh'), 'valid github link was dropped');
+});
+
 await test('session token: sign/verify roundtrip, tamper + expiry rejected', () => {
   const token = createSessionToken();
   const data = verifySessionToken(token);
